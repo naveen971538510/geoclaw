@@ -1201,6 +1201,82 @@ async def api_contradiction_resolve(contradiction_id: int, request: Request):
         return JSONResponse({"status": "error", "route": "/api/contradictions/resolve", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/alerts", response_class=JSONResponse)
+def api_alerts(limit: int = 30):
+    try:
+        from services.db_helpers import get_conn
+        from config import DB_PATH
+
+        conn = get_conn(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                COALESCE(alert_type, '') AS alert_type,
+                COALESCE(title, '') AS title,
+                COALESCE(body, '') AS body,
+                created_at,
+                COALESCE(resolved, 0) AS resolved
+            FROM alert_events
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(limit or 30),),
+        )
+        items = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        return JSONResponse({"status": "ok", "alerts": items})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/alerts", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/alerts/{alert_id}/dismiss", response_class=JSONResponse)
+def api_alert_dismiss(alert_id: int, request: Request):
+    try:
+        _mutation_guard(request)
+        from services.db_helpers import get_conn
+        from config import DB_PATH
+        from services.goal_service import utc_now_iso
+
+        conn = get_conn(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE alert_events
+            SET resolved = 1,
+                resolved_at = ?,
+                status = CASE
+                    WHEN COALESCE(status, '') = '' THEN 'resolved'
+                    ELSE status
+                END
+            WHERE id = ?
+            """,
+            (utc_now_iso(), int(alert_id)),
+        )
+        conn.commit()
+        conn.close()
+        return JSONResponse({"status": "ok"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/alerts/dismiss", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/alerts/unread/count", response_class=JSONResponse)
+def api_alerts_unread_count():
+    try:
+        from services.db_helpers import get_conn
+        from config import DB_PATH
+
+        conn = get_conn(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM alert_events WHERE COALESCE(resolved, 0) = 0")
+        count = int(cur.fetchone()[0] or 0)
+        conn.close()
+        return JSONResponse({"status": "ok", "count": count})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/alerts/unread/count", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/search", response_class=JSONResponse)
 def api_search(q: str = "", type: str = "all"):
     try:

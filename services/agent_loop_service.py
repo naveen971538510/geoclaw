@@ -374,6 +374,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     autonomous_goals_created = 0
     reflection_metrics = {}
     briefing_created = 0
+    alerts_fired = 0
     decay_stats = {"decayed": 0, "superseded": 0}
     promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
     cooldown_blocked_actions = 0
@@ -537,6 +538,28 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
             seen_action_ids.add(int(proposed.get("id", 0) or 0))
             action_proposals_created += 1
 
+    try:
+        from services.alert_service import AlertService
+
+        alerter = AlertService(DB_PATH)
+        alert_conn = shared_get_conn(DB_PATH)
+        alert_cur = alert_conn.cursor()
+        alert_cur.execute("SELECT * FROM agent_theses WHERE COALESCE(status, '') != 'superseded'")
+        theses_for_alerts = [dict(row) for row in alert_cur.fetchall()]
+        alert_cur.execute(
+            """
+            SELECT * FROM agent_actions
+            WHERE COALESCE(status, '') IN ('draft', 'proposed', 'auto_approved', 'approved')
+            ORDER BY created_at DESC, id DESC
+            """
+        )
+        actions_for_alerts = [dict(row) for row in alert_cur.fetchall()]
+        alert_conn.close()
+        alerts_fired = int(alerter.evaluate_theses(theses_for_alerts) or 0) + int(alerter.evaluate_actions(actions_for_alerts) or 0)
+    except Exception as exc:
+        logger.warning("Alert step failed: %s", exc)
+        alerts_fired = 0
+
     evaluations = evaluate_previous_items(cards, max_items=16)
     current_cards_by_article = {int(card.get("article_id", 0) or 0): card for card in cards if int(card.get("article_id", 0) or 0)}
 
@@ -688,6 +711,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "action_proposals_created": action_proposals_created,
         "research_agent_runs": research_agent_runs,
         "autonomous_goals_created": autonomous_goals_created,
+        "alerts_fired": alerts_fired,
         "reasoning_chains_built": int(ingestion.get("reasoning_chains_built", 0) or 0) + int(reasoning_pipeline_stats.get("chains_written", 0) or 0),
         "reasoning_pipeline": reasoning_pipeline_stats,
         "reasoning_cap_blocks": reasoning_cap_blocks,

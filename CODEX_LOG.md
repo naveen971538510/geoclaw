@@ -949,3 +949,32 @@ python3 startup.py
   - warnings only:
     - `OPENAI_API_KEY` not set
     - port `8000` already in use by the running server
+
+## Night 4 — Phase 4 Alert System
+
+- Verified the partial Night 4 files (`services/llm_analyst.py`, `services/price_feed.py`, `services/feed_manager.py`, `startup.py`) still compiled before touching Phase 4.
+- Confirmed `alert_events` already existed in the live DB and in `migration.py`, so no risky schema rewrite was needed.
+- Added `/Users/naveenkumar/GeoClaw/services/alert_service.py`
+  - desktop notifications
+  - optional email/webhook delivery
+  - cooldown protection
+  - thesis/action evaluation helpers
+  - compatibility logic for the existing `alert_events(article_id NOT NULL)` schema by resolving a real article id before inserts
+- Updated `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+  - real agent loop now evaluates active theses and actionable proposals through `AlertService`
+  - added `alerts_fired` to run metrics
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - added `GET /api/alerts`
+  - added `GET /api/alerts/unread/count`
+  - added `POST /api/alerts/{id}/dismiss`
+- Updated `/Users/naveenkumar/GeoClaw/.env.geoclaw.example` with alert configuration keys.
+- Verification:
+  - `python3 migration.py` ✓
+  - `python3 -m py_compile migration.py` ✓
+  - `python3 -m py_compile services/alert_service.py` ✓
+  - `python3 -m py_compile services/agent_loop_service.py` ✓
+  - `python3 -m py_compile main.py` ✓
+  - live route checks:
+    - `/api/alerts` ✓
+    - `/api/alerts/unread/count` ✓
+    - `/api/alerts/1/dismiss` ✓
