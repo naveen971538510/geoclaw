@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from typing import List
+import urllib.request
 from xml.etree import ElementTree as ET
-import requests
+
+try:
+    import requests
+except ImportError:  # pragma: no cover - exercised through fallback imports
+    requests = None
 
 from models import RawArticle
 from .base import NewsSource, clean_text
@@ -72,9 +77,15 @@ class RSSSource(NewsSource):
         all_items: List[RawArticle] = []
         for feed in self.feeds:
             try:
-                res = requests.get(feed["url"], timeout=self.timeout, headers={"User-Agent": "GeoClaw/2.0"})
-                res.raise_for_status()
-                parsed = self._parse_rss(res.text, feed["name"])
+                if requests is not None:
+                    response = requests.get(feed["url"], timeout=self.timeout, headers={"User-Agent": "GeoClaw/2.0"})
+                    response.raise_for_status()
+                    xml_text = response.text
+                else:
+                    request = urllib.request.Request(feed["url"], headers={"User-Agent": "GeoClaw/2.0"}, method="GET")
+                    with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                        xml_text = response.read().decode("utf-8", errors="ignore")
+                parsed = self._parse_rss(xml_text, feed["name"])
                 all_items.extend(parsed)
             except Exception as exc:
                 print(f"RSSSource warning [{feed['name']}]: {exc}")

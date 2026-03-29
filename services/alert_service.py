@@ -139,33 +139,51 @@ class AlertService:
 
     def _log_alert(self, alert_name, title, body, payload=None):
         try:
-            article_id = self._resolve_article_id(payload)
-            if not article_id:
-                logger.warning("Alert log skipped because no article_id could be resolved for %s", alert_name)
-                return
-
             conn = sqlite3.connect(self.db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute(
-                """
-                INSERT INTO alert_events (
-                    article_id, priority, reason, created_at,
-                    is_read, status, resolved, resolution_note, resolved_at,
-                    alert_type, title, body
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(alert_events)").fetchall()}
+            created_at = datetime.now(timezone.utc).isoformat()
+            if "article_id" in columns:
+                article_id = self._resolve_article_id(payload)
+                if not article_id:
+                    logger.warning("Alert log skipped because no article_id could be resolved for %s", alert_name)
+                    conn.close()
+                    return
+                conn.execute(
+                    """
+                    INSERT INTO alert_events (
+                        article_id, priority, reason, created_at,
+                        is_read, status, resolved, resolution_note, resolved_at,
+                        alert_type, title, body
+                    )
+                    VALUES (?, ?, ?, ?, 0, 'open', 0, '', '', ?, ?, ?)
+                    """,
+                    (
+                        int(article_id),
+                        "high",
+                        str(title or "")[:200],
+                        created_at,
+                        str(alert_name or "")[:120],
+                        str(title or "")[:200],
+                        str(body or "")[:500],
+                    ),
                 )
-                VALUES (?, ?, ?, ?, 0, 'open', 0, '', '', ?, ?, ?)
-                """,
-                (
-                    int(article_id),
-                    "high",
-                    str(title or "")[:200],
-                    datetime.now(timezone.utc).isoformat(),
-                    str(alert_name or "")[:120],
-                    str(title or "")[:200],
-                    str(body or "")[:500],
-                ),
-            )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO alert_events (
+                        alert_type, title, body, created_at, resolved, resolution_note, resolved_at
+                    )
+                    VALUES (?, ?, ?, ?, 0, '', '')
+                    """,
+                    (
+                        str(alert_name or "")[:120],
+                        str(title or "")[:200],
+                        str(body or "")[:500],
+                        created_at,
+                    ),
+                )
             conn.commit()
             conn.close()
         except Exception as exc:

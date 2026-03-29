@@ -1,7 +1,14 @@
+import json
 import sqlite3
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List
-import requests
+
+try:
+    import requests
+except ImportError:  # pragma: no cover - exercised indirectly in tests
+    requests = None
 
 from config import ALPHAVANTAGE_KEY, DB_PATH, TRACKED_SYMBOLS
 from mock_providers import MOCK_MARKET, get_market_data
@@ -89,15 +96,35 @@ def _api_error(data: dict) -> str:
     return ""
 
 
+def _get_json(params: Dict, timeout: int = 20) -> Dict:
+    headers = {"User-Agent": "GeoClaw/2.0"}
+    if requests is not None:
+        response = requests.get(
+            "https://www.alphavantage.co/query",
+            params=params,
+            timeout=timeout,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    query = urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        f"https://www.alphavantage.co/query?{query}",
+        headers=headers,
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _fetch_equity_quote(symbol: str, timeout: int = 20) -> Dict:
     params = {
         "function": "GLOBAL_QUOTE",
         "symbol": symbol,
         "apikey": ALPHAVANTAGE_KEY,
     }
-    res = requests.get("https://www.alphavantage.co/query", params=params, timeout=timeout, headers={"User-Agent": "GeoClaw/2.0"})
-    res.raise_for_status()
-    data = res.json()
+    data = _get_json(params, timeout=timeout)
 
     err = _api_error(data)
     if err:
@@ -127,9 +154,7 @@ def _fetch_fx_quote(pair: str, timeout: int = 20) -> Dict:
         "to_currency": to_symbol,
         "apikey": ALPHAVANTAGE_KEY,
     }
-    res = requests.get("https://www.alphavantage.co/query", params=params, timeout=timeout, headers={"User-Agent": "GeoClaw/2.0"})
-    res.raise_for_status()
-    data = res.json()
+    data = _get_json(params, timeout=timeout)
 
     err = _api_error(data)
     if err:

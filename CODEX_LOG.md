@@ -1221,3 +1221,26 @@ python3 startup.py
 - Verification:
   - `make -n once` ✓
   - `python3 -c "open('.env.geoclaw.example').read(); print('env example OK')"` ✓
+
+## Night 4 — Phase 13 Test Suite
+
+- Added test files:
+  - `/Users/naveenkumar/GeoClaw/tests/__init__.py`
+  - `/Users/naveenkumar/GeoClaw/tests/smoke_test.py`
+  - `/Users/naveenkumar/GeoClaw/tests/test_rule_engine.py`
+  - `/Users/naveenkumar/GeoClaw/tests/test_alert_service.py`
+  - `/Users/naveenkumar/GeoClaw/tests/test_pattern_detector.py`
+- Updated runtime compatibility for the suite:
+  - `/Users/naveenkumar/GeoClaw/services/alert_service.py`
+    - now supports both the full production `alert_events` schema and minimal temp-table schemas used by unit tests
+  - `/Users/naveenkumar/GeoClaw/market/prices.py`
+    - added HTTP fallback path so import/runtime is robust even when `requests` is unavailable
+  - `/Users/naveenkumar/GeoClaw/sources/rss_client.py`
+    - added HTTP fallback path for the same reason
+  - `/Users/naveenkumar/GeoClaw/tests/smoke_test.py`
+    - improved to handle both HTML page routes and JSON API routes
+- Verification:
+  - `source venv/bin/activate && python3 -m unittest discover -s tests -v` ✓
+  - result: `OK` with `58` tests
+  - `source venv/bin/activate && python3 tests/smoke_test.py` ✓
+  - smoke result: `29 passed, 0 failed`

@@ -1,0 +1,77 @@
+/Users/naveenkumar/GeoClaw/venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+test_action_approved_event_recorded (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_policy_auto_approves_high_confidence (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_policy_blocks_low_confidence (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_rejected_event_recorded (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_approve_action_sets_status_and_audit_note (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_reasoning_chain_returns_required_fields_in_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_thesis_claim_fallback_title_derived_from_headline (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_thesis_claim_missing_key_fallback_has_required_fields (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_calibration_penalty_fires_after_three_wrong_predictions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_can_auto_approve_threshold (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_cluster_dedupe (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_contradiction_flow (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_decision_dedupe (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_duplicate_source_penalty_after_three_contributions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_evaluate_and_propose_creates_alert_proposal (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_evaluate_and_propose_does_not_duplicate_same_thesis_action (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_generate_autonomous_goals_avoids_duplicate_titles (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_generate_daily_briefing_runs_when_tables_empty (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_calibration_score_returns_f_when_accuracy_below_point_four (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_thesis_detail_returns_required_fields (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_thesis_timeline_returns_chronological_order (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_migration_idempotency (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_missing_key_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_propose_action_saves_proposed_without_execution (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_recency_weight_recent_vs_old (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_record_prediction_stores_row_correctly (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_record_thesis_event_inserts_row (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_reflection_records_lesson_for_wrong_decision (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_reject_action_sets_status (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_repeated_run_stability (test_agent_intelligence.GeoClawAgentTests) ... 2026-03-29 22:47:17,223 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,601 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,636 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,671 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,705 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,738 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,771 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,806 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,843 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:47:17,878 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+ok
+test_research_thesis_generates_three_queries_in_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_research_thesis_handles_no_articles_found (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_run_reflection_handles_empty_decisions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_task_closure (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_drilldown_returns_trace (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_payload_compatibility (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_summary_and_diff_helpers (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_update_thesis_confidence_source_weight_known_vs_unknown (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_cooldown_blocks_repeat (test_alert_service.TestAlertService) ... ok
+test_cooldown_ok_when_no_history (test_alert_service.TestAlertService) ... ok
+test_evaluate_theses_returns_count (test_alert_service.TestAlertService) ... 2026-03-29 22:47:19,612 INFO geoclaw.alerts Alert fired: high_confidence_thesis_1
+2026-03-29 22:47:19,708 INFO geoclaw.alerts Alert fired: confirmed_thesis_1
+ok
+test_log_alert_writes_to_db (test_alert_service.TestAlertService) ... ok
+test_crisis_regime_high_risk_theses (test_pattern_detector.TestPatternDetector) ... ok
+test_empty_theses_returns_neutral (test_pattern_detector.TestPatternDetector) ... ok
+test_narrative_clustering_returns_list (test_pattern_detector.TestPatternDetector) ... ok
+test_narratives_sorted_by_confidence (test_pattern_detector.TestPatternDetector) ... ok
+test_neutral_regime_low_conf (test_pattern_detector.TestPatternDetector) ... ok
+test_all_articles_produce_thesis_key (test_rule_engine.TestRuleEngine) ... ok
+test_ceasefire_negative_delta (test_rule_engine.TestRuleEngine) ... ok
+test_chain_always_has_2_hops (test_rule_engine.TestRuleEngine) ... ok
+test_chain_hops_have_required_fields (test_rule_engine.TestRuleEngine) ... ok
+test_delta_always_clamped (test_rule_engine.TestRuleEngine) ... ok
+test_fed_produces_non_zero_delta (test_rule_engine.TestRuleEngine) ... ok
+test_iran_missile_high_delta (test_rule_engine.TestRuleEngine) ... ok
+test_neutral_article_fallback (test_rule_engine.TestRuleEngine) ... ok
+test_recession_positive_risk_delta (test_rule_engine.TestRuleEngine) ... ok
+test_terminal_risk_levels (test_rule_engine.TestRuleEngine) ... ok
+test_watchlist_suggestion_oil (test_rule_engine.TestRuleEngine) ... ok
+
+----------------------------------------------------------------------
+Ran 58 tests in 8.330s
+
+OK
