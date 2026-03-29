@@ -1168,3 +1168,27 @@ python3 startup.py
   - `python3 -m py_compile services/cache_service.py` ✓
   - `python3 -m py_compile services/agent_loop_service.py` ✓
   - `python3 -m py_compile main.py` ✓
+
+## Night 4 — Phase 11 API Audit
+
+- Audited the required route surface in `/Users/naveenkumar/GeoClaw/main.py`
+  - page routes verified present:
+    - `/dashboard`
+    - `/terminal`
+    - `/theses`
+    - `/articles`
+    - `/agent-runs`
+    - `/briefings`
+    - `/contradictions`
+    - `/watchlist`
+  - data, intelligence, scheduler, and terminal helper routes verified present
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - changed `GET /` to a real `302` redirect to `/dashboard`
+- Verification:
+  - `python3 -m py_compile main.py` ✓
+  - `GET /` → `302` redirect to `/dashboard`
+  - spot checks:
+    - `/api/alerts` → `200`
+    - `/api/watchlist` → `200`
+    - `/api/briefing/history` → `200`
+    - `/api/intelligence/narratives` → `200`

@@ -206,7 +206,7 @@ def find_live_matches(word: str):
 
 @app.get("/")
 def home():
-    return {"message": "Hello, GeoClaw is running"}
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 
 @app.get("/status")
