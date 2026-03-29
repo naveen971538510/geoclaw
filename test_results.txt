@@ -29,16 +29,16 @@ test_record_prediction_stores_row_correctly (test_agent_intelligence.GeoClawAgen
 test_record_thesis_event_inserts_row (test_agent_intelligence.GeoClawAgentTests) ... ok
 test_reflection_records_lesson_for_wrong_decision (test_agent_intelligence.GeoClawAgentTests) ... ok
 test_reject_action_sets_status (test_agent_intelligence.GeoClawAgentTests) ... ok
-test_repeated_run_stability (test_agent_intelligence.GeoClawAgentTests) ... 2026-03-29 22:47:17,223 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,601 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,636 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,671 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,705 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,738 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,771 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,806 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,843 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
-2026-03-29 22:47:17,878 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+test_repeated_run_stability (test_agent_intelligence.GeoClawAgentTests) ... 2026-03-29 22:54:30,721 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,124 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,160 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,195 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,232 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,268 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,304 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,344 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,381 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
+2026-03-29 22:54:31,418 WARNING geoclaw.price_feed yfinance not installed — price feed disabled. pip install yfinance
 ok
 test_research_thesis_generates_three_queries_in_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
 test_research_thesis_handles_no_articles_found (test_agent_intelligence.GeoClawAgentTests) ... ok
@@ -50,8 +50,8 @@ test_terminal_summary_and_diff_helpers (test_agent_intelligence.GeoClawAgentTest
 test_update_thesis_confidence_source_weight_known_vs_unknown (test_agent_intelligence.GeoClawAgentTests) ... ok
 test_cooldown_blocks_repeat (test_alert_service.TestAlertService) ... ok
 test_cooldown_ok_when_no_history (test_alert_service.TestAlertService) ... ok
-test_evaluate_theses_returns_count (test_alert_service.TestAlertService) ... 2026-03-29 22:47:19,612 INFO geoclaw.alerts Alert fired: high_confidence_thesis_1
-2026-03-29 22:47:19,708 INFO geoclaw.alerts Alert fired: confirmed_thesis_1
+test_evaluate_theses_returns_count (test_alert_service.TestAlertService) ... 2026-03-29 22:54:33,366 INFO geoclaw.alerts Alert fired: high_confidence_thesis_1
+2026-03-29 22:54:33,473 INFO geoclaw.alerts Alert fired: confirmed_thesis_1
 ok
 test_log_alert_writes_to_db (test_alert_service.TestAlertService) ... ok
 test_crisis_regime_high_risk_theses (test_pattern_detector.TestPatternDetector) ... ok
@@ -72,6 +72,6 @@ test_terminal_risk_levels (test_rule_engine.TestRuleEngine) ... ok
 test_watchlist_suggestion_oil (test_rule_engine.TestRuleEngine) ... ok
 
 ----------------------------------------------------------------------
-Ran 58 tests in 8.330s
+Ran 58 tests in 9.812s
 
 OK

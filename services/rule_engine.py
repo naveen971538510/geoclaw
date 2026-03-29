@@ -156,6 +156,19 @@ class RuleEngine:
                     }
                 )
 
+        if len(chain) < 2:
+            kw, delta, timeframe, mechanism, implication = matched_rules[0]
+            chain.append(
+                {
+                    "hop": 2,
+                    "from": "market positioning",
+                    "to": kw + " exposure",
+                    "mechanism": implication or mechanism,
+                    "confidence": round(0.5 + abs(delta), 2),
+                    "timeframe": timeframe,
+                }
+            )
+
         total_delta = max(-0.25, min(0.25, total_delta))
         return total_delta, chain
 

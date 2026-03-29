@@ -1244,3 +1244,70 @@ python3 startup.py
   - result: `OK` with `58` tests
   - `source venv/bin/activate && python3 tests/smoke_test.py` ✓
   - smoke result: `29 passed, 0 failed`
+
+## Night 4 Continuation — Complete
+
+Status: All phases 4–14 complete
+
+Files created this session:
+- `/Users/naveenkumar/GeoClaw/services/alert_service.py`
+- `/Users/naveenkumar/GeoClaw/services/pattern_detector.py`
+- `/Users/naveenkumar/GeoClaw/services/self_calibrator.py`
+- `/Users/naveenkumar/GeoClaw/services/cache_service.py`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+- `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+- `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- `/Users/naveenkumar/GeoClaw/Makefile`
+- `/Users/naveenkumar/GeoClaw/tests/__init__.py`
+- `/Users/naveenkumar/GeoClaw/tests/smoke_test.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_rule_engine.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_alert_service.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_pattern_detector.py`
+
+Routes added:
+- `GET /`
+- `GET /theses`
+- `GET /articles`
+- `GET /briefings`
+- `GET /contradictions`
+- `GET /watchlist`
+- `GET /api/articles/{id}`
+- `GET /api/theses/{key}/history`
+- `GET /api/alerts`
+- `GET /api/alerts/unread/count`
+- `POST /api/alerts/{id}/dismiss`
+- `GET /api/briefing/{id}`
+- `GET /api/prices`
+- `GET /api/prices/{thesis_key}`
+- `GET /api/intelligence/narratives`
+- `GET /api/intelligence/momentum`
+- `GET /api/intelligence/regime`
+- `GET /api/intelligence/calibration`
+
+Tables added:
+- `alert_events`
+- `thesis_confidence_log`
+- `llm_usage`
+- `price_snapshots`
+
+Tests passing: `58` total
+Smoke test: `29/29` routes
+
+Key features:
+- LLM integration
+- live prices
+- alerts
+- 7 new pages
+- pattern detection
+- market regime
+- self-calibration
+
+Morning commands:
+  cd /Users/naveenkumar/GeoClaw && source venv/bin/activate
+  make start
+  make once
+  make prices
+  make status
+  open http://127.0.0.1:8000/dashboard
