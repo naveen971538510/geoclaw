@@ -1053,3 +1053,54 @@ python3 startup.py
   - `python3 -c "open('ui/dashboard.html').read(); print('OK')"` ✓
   - `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/dashboard` → `200`
   - `curl -s http://127.0.0.1:8000/api/alerts/unread/count | python3 -m json.tool` ✓
+
+## Night 4 — Phase 8 Intelligence Pages
+
+- Added new UI pages:
+  - `/Users/naveenkumar/GeoClaw/ui/theses.html`
+  - `/Users/naveenkumar/GeoClaw/ui/articles.html`
+  - `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+  - `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+  - `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - added page routes:
+    - `GET /theses`
+    - `GET /articles`
+    - `GET /briefings`
+    - `GET /contradictions`
+    - `GET /watchlist`
+  - added detail/data routes:
+    - `GET /api/articles/{id}`
+    - `GET /api/briefing/{id}`
+  - expanded:
+    - `/api/articles` now accepts `sentiment`, `q`, and `source`
+    - `/api/briefing/history` now returns both `items` and `briefings`
+    - `/terminal/theses` now accepts a `limit` query param
+- Updated `/Users/naveenkumar/GeoClaw/services/terminal_service.py`
+  - richer `/api/articles` payload:
+    - sentiment
+    - relevance score
+    - cluster key
+    - entity tags
+    - thesis linkage/confidence
+  - added article detail helper with stored reasoning-chain data
+- Updated nav bars in existing pages:
+  - `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+  - `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+  - `/Users/naveenkumar/GeoClaw/ui/agent_runs.html`
+- Verification:
+  - all UI HTML files under `ui/` opened successfully with Python file-read checks
+  - page route checks:
+    - `/theses` → `200`
+    - `/articles` → `200`
+    - `/briefings` → `200`
+    - `/contradictions` → `200`
+    - `/watchlist` → `200`
+    - `/agent-runs` → `200`
+    - `/dashboard` → `200`
+    - `/terminal` → `200`
+  - API checks:
+    - `/api/articles?limit=2` ✓
+    - `/api/articles/1` ✓
+    - `/api/briefing/history` ✓
+    - `/api/briefing/1` ✓

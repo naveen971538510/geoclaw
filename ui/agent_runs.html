@@ -26,9 +26,14 @@
 <body>
   <nav>
     <strong>GeoClaw</strong>
-    <a href="/dashboard">Dashboard</a>
-    <a href="/terminal">Terminal</a>
-    <a href="/agent-runs" class="active">Agent Runs</a>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
   </nav>
   <div class="page">
     <div class="panel">
@@ -39,6 +44,11 @@
   </div>
   <script>
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
     async function loadRuns(){
       try{
         const res = await fetch('/agent-journal');

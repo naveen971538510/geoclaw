@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from data import demo_articles
 from helpers import (
     filter_articles_by_field,
@@ -469,11 +469,46 @@ def geoclaw_dashboard():
     return HTMLResponse(render_terminal_asset("dashboard.html"))
 
 
+@app.get("/theses", response_class=HTMLResponse)
+def geoclaw_theses_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("theses.html"))
+
+
+@app.get("/articles", response_class=HTMLResponse)
+def geoclaw_articles_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("articles.html"))
+
+
 @app.get("/agent-runs", response_class=HTMLResponse)
 def geoclaw_agent_runs_page():
     from services.terminal_ui_service import render_terminal_asset
 
     return HTMLResponse(render_terminal_asset("agent_runs.html"))
+
+
+@app.get("/briefings", response_class=HTMLResponse)
+def geoclaw_briefings_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("briefings.html"))
+
+
+@app.get("/contradictions", response_class=HTMLResponse)
+def geoclaw_contradictions_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("contradictions.html"))
+
+
+@app.get("/watchlist", response_class=HTMLResponse)
+def geoclaw_watchlist_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("watchlist.html"))
 
 
 @app.get("/terminal-ui/terminal.css")
@@ -565,11 +600,11 @@ def terminal_data():
 
 
 @app.get("/terminal/theses", response_class=JSONResponse)
-def terminal_theses():
+def terminal_theses(limit: int = 80):
     try:
         from services.terminal_service import get_terminal_theses
 
-        theses = get_terminal_theses(limit=80)
+        theses = get_terminal_theses(limit=limit)
         return JSONResponse({"status": "ok", "items": theses, "theses": theses})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/terminal/theses", "error": str(exc)}, status_code=500)
@@ -1055,14 +1090,27 @@ def health_deep():
 
 
 @app.get("/api/articles", response_class=JSONResponse)
-def api_articles(limit: int = 20, offset: int = 0, days: int = 2):
+def api_articles(limit: int = 20, offset: int = 0, days: int = 2, sentiment: str = "", q: str = "", source: str = ""):
     try:
         from services.terminal_service import list_terminal_articles
 
-        payload = list_terminal_articles(limit=limit, offset=offset, days=days)
+        payload = list_terminal_articles(limit=limit, offset=offset, days=days, sentiment=sentiment, q=q, source=source)
         return JSONResponse({"status": "ok", **payload})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/articles", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/articles/{article_id}", response_class=JSONResponse)
+def api_article_detail(article_id: int):
+    try:
+        from services.terminal_service import get_terminal_article_detail
+
+        item = get_terminal_article_detail(article_id)
+        if not item:
+            return JSONResponse({"status": "error", "route": "/api/articles/detail", "error": "not found"}, status_code=404)
+        return JSONResponse({"status": "ok", "item": item, "article": item})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/articles/detail", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/theses/{thesis_key:path}/history", response_class=JSONResponse)
@@ -1388,9 +1436,23 @@ def api_briefing_history():
     try:
         from services.briefing_service import list_briefings
 
-        return JSONResponse({"status": "ok", "items": list_briefings(limit=10)})
+        items = list_briefings(limit=20)
+        return JSONResponse({"status": "ok", "items": items, "briefings": items})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/briefing/history", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/briefing/{briefing_id}", response_class=JSONResponse)
+def api_briefing_detail(briefing_id: int):
+    try:
+        from services.briefing_service import list_briefings
+
+        item = next((entry for entry in list_briefings(limit=100) if int(entry.get("id", 0) or 0) == int(briefing_id)), None)
+        if not item:
+            return JSONResponse({"status": "error", "route": "/api/briefing/detail", "error": "not found"}, status_code=404)
+        return JSONResponse({"status": "ok", "item": item})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/briefing/detail", "error": str(exc)}, status_code=500)
 
 
 @app.get("/source-health", response_class=JSONResponse)

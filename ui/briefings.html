@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Briefings</title>
+  <style>
+    :root{--bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--blue:#4da3ff}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:#0d131c;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none} nav strong{color:#fff}
+    .page{padding:18px 20px 40px}
+    .layout{display:grid;grid-template-columns:28% 1fr;gap:16px}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+    .item{padding:10px;border:1px solid transparent;border-radius:10px;cursor:pointer}
+    .item.active{border-color:#4da3ff;background:#161f2d}
+    .muted{color:var(--muted)}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:7px 11px;cursor:pointer}
+    #gc-briefing-body h2,#gc-briefing-body h3{margin:16px 0 8px}
+    @media (max-width: 900px){.layout{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="layout">
+      <div class="panel">
+        <h2 style="margin-top:0">Briefing History</h2>
+        <div id="gc-brief-list" class="muted">Loading…</div>
+      </div>
+      <div class="panel">
+        <div class="actions">
+          <button class="btn" id="gc-copy-btn">Copy</button>
+          <button class="btn" id="gc-download-btn">Download .txt</button>
+          <div class="muted" id="gc-brief-meta"></div>
+        </div>
+        <div id="gc-briefing-body" class="muted">Select a briefing.</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    let gcBriefings = [];
+    let gcSelected = null;
+    let gcRawText = '';
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+    function mdToHtml(text){
+      const listWrapped = String(text || '').replace(/^- (.+)$/gm, '<li>$1</li>');
+      return listWrapped
+        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/---/g, '<hr>')
+        .replace(/\n/g, '<br>');
+    }
+    async function loadHistory(){
+      const data = await fetch('/api/briefing/history').then(r => r.json());
+      gcBriefings = data.items || data.briefings || [];
+      const list = document.getElementById('gc-brief-list');
+      if (!gcBriefings.length){
+        list.innerHTML = 'No briefings stored yet.';
+        return;
+      }
+      list.innerHTML = gcBriefings.map((b, idx) => `<div class="item ${idx === 0 ? 'active' : ''}" data-id="${b.id}"><div><strong>${esc(b.generated_at || 'unknown time')}</strong></div><div class="muted">${esc(String(b.thesis_count || 0))} theses · ${esc(String(b.action_count || 0))} actions</div></div>`).join('');
+      document.querySelectorAll('[data-id]').forEach(node => node.addEventListener('click', () => selectBrief(Number(node.dataset.id))));
+      await selectBrief(gcBriefings[0].id);
+    }
+    async function selectBrief(id){
+      gcSelected = id;
+      document.querySelectorAll('[data-id]').forEach(node => node.classList.toggle('active', Number(node.dataset.id) === id));
+      const data = await fetch('/api/briefing/' + id).then(r => r.json());
+      const item = data.item || {};
+      gcRawText = item.briefing_text || '';
+      document.getElementById('gc-brief-meta').textContent = item.generated_at || '';
+      document.getElementById('gc-briefing-body').innerHTML = mdToHtml(gcRawText || 'No briefing text available.');
+    }
+    document.getElementById('gc-copy-btn').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(gcRawText || ''); } catch (e) {}
+    });
+    document.getElementById('gc-download-btn').addEventListener('click', () => {
+      const blob = new Blob([gcRawText || ''], {type:'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'geoclaw-brief-' + new Date().toISOString().slice(0,10) + '.txt';
+      a.click();
+    });
+    loadHistory().catch(() => { document.getElementById('gc-brief-list').textContent = 'Could not load briefing history.'; });
+  </script>
+</body>
+</html>

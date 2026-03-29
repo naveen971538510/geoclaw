@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Contradictions</title>
+  <style>
+    :root{--bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--red:#d95c5c;--yellow:#d39a33}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:#0d131c;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none} nav strong{color:#fff}
+    .page{padding:18px 20px 40px}
+    .stats,.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+    .stats{padding:12px 14px;display:flex;gap:18px;flex-wrap:wrap;margin-bottom:16px}
+    .panel{padding:14px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-size:12px;text-transform:uppercase}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px}
+    .major{background:rgba(217,92,92,.18);color:#ffb0b0}.minor{background:rgba(211,154,51,.18);color:#ffd488}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:6px 10px;cursor:pointer}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="stats" id="gc-stats">Loading stats…</div>
+    <div class="panel">
+      <h2 style="margin-top:0">Active Contradictions</h2>
+      <div id="gc-active">Loading…</div>
+    </div>
+    <details class="panel" style="margin-top:16px">
+      <summary>Resolved contradictions</summary>
+      <div id="gc-resolved" style="margin-top:12px">Loading…</div>
+    </details>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+    function timeAgo(iso){
+      const ms = Date.parse(String(iso || ''));
+      if (!ms) return 'n/a';
+      const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      if (mins < 60) return `${mins}m ago`;
+      if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+      return `${Math.floor(mins / 1440)}d ago`;
+    }
+    async function loadContradictions(){
+      const [active, resolved] = await Promise.all([
+        fetch('/api/contradictions?resolved=0').then(r => r.json()),
+        fetch('/api/contradictions?resolved=1').then(r => r.json())
+      ]);
+      const activeItems = active.contradictions || [];
+      const resolvedItems = resolved.contradictions || [];
+      document.getElementById('gc-stats').innerHTML = `<div>${activeItems.length} active</div><div>${resolvedItems.length} resolved</div><div>${activeItems.length + resolvedItems.length} total</div>`;
+      document.getElementById('gc-active').innerHTML = activeItems.length ? `<table><thead><tr><th>Severity</th><th>Thesis</th><th>Explanation</th><th>Created</th><th></th></tr></thead><tbody>
+        ${activeItems.map(c => `<tr>
+          <td><span class="badge ${String(c.severity || c.priority || 'minor').toLowerCase().includes('major') ? 'major' : 'minor'}">${esc(c.severity || c.priority || 'minor')}</span></td>
+          <td>${esc((c.thesis_key || c.headline || c.article_headline_a || '').slice(0,80))}</td>
+          <td>${esc(c.explanation || c.reason || c.article_headline_b || '')}</td>
+          <td>${esc(timeAgo(c.created_at))}</td>
+          <td><button class="btn" onclick="resolveContradiction(${c.id})">Resolve</button></td>
+        </tr>`).join('')}
+      </tbody></table>` : '<div class="muted">✓ No active contradictions</div>';
+      document.getElementById('gc-resolved').innerHTML = resolvedItems.length ? `<table><thead><tr><th>Severity</th><th>Thesis</th><th>Resolution</th><th>Resolved</th></tr></thead><tbody>
+        ${resolvedItems.map(c => `<tr><td>${esc(c.severity || c.priority || 'minor')}</td><td>${esc((c.thesis_key || c.headline || '').slice(0,80))}</td><td>${esc(c.resolution_note || '')}</td><td>${esc(timeAgo(c.resolved_at || c.created_at))}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="muted">No resolved contradictions yet.</div>';
+    }
+    async function resolveContradiction(id){
+      const note = window.prompt('Resolution note (optional):', '') || '';
+      await fetch('/api/contradictions/' + id + '/resolve', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({note})});
+      loadContradictions();
+    }
+    loadContradictions().catch(() => {
+      document.getElementById('gc-active').textContent = 'Could not load contradictions.';
+      document.getElementById('gc-resolved').textContent = 'Could not load resolved contradictions.';
+    });
+  </script>
+</body>
+</html>

@@ -504,30 +504,85 @@ def get_terminal_actions(limit: int = 60) -> List[Dict]:
     return list_actions(limit=limit)
 
 
-def list_terminal_articles(limit: int = 20, offset: int = 0, days: int = 2) -> Dict:
+def _sentiment_label(signal: str) -> str:
+    raw = str(signal or "").strip().lower()
+    if raw == "bullish":
+        return "positive"
+    if raw == "bearish":
+        return "negative"
+    return "neutral"
+
+
+def list_terminal_articles(limit: int = 20, offset: int = 0, days: int = 2, sentiment: str = "", q: str = "", source: str = "") -> Dict:
     conn = get_conn()
     cur = conn.cursor()
     days_value = max(1, int(days or 2))
+    where_parts = ["COALESCE(ia.fetched_at, ia.published_at, '') >= datetime('now', ?)"]
+    params = [f"-{days_value} days"]
+
+    clean_sentiment = str(sentiment or "").strip().lower()
+    if clean_sentiment == "positive":
+        where_parts.append("LOWER(COALESCE(ae.signal, '')) = 'bullish'")
+    elif clean_sentiment == "negative":
+        where_parts.append("LOWER(COALESCE(ae.signal, '')) = 'bearish'")
+    elif clean_sentiment == "neutral":
+        where_parts.append("(LOWER(COALESCE(ae.signal, '')) = 'neutral' OR COALESCE(ae.signal, '') = '')")
+
+    clean_query = str(q or "").strip()
+    if clean_query:
+        where_parts.append("(ia.headline LIKE ? OR COALESCE(ia.summary, '') LIKE ? OR COALESCE(ia.source_name, '') LIKE ?)")
+        like = f"%{clean_query}%"
+        params.extend([like, like, like])
+
+    clean_source = str(source or "").strip()
+    if clean_source:
+        where_parts.append("COALESCE(ia.source_name, '') = ?")
+        params.append(clean_source)
+
+    where_sql = " AND ".join(where_parts)
     cur.execute(
-        """
+        f"""
         SELECT COUNT(*)
-        FROM ingested_articles
-        WHERE COALESCE(fetched_at, published_at, '') >= datetime('now', ?)
+        FROM ingested_articles ia
+        LEFT JOIN article_enrichment ae
+          ON ae.article_id = ia.id
+        WHERE {where_sql}
         """,
-        (f"-{days_value} days",),
+        tuple(params),
     )
     total = int(cur.fetchone()[0] or 0)
     cur.execute(
-        """
-        SELECT id, headline, url, source_name, published_at, fetched_at
-        FROM ingested_articles
-        WHERE COALESCE(fetched_at, published_at, '') >= datetime('now', ?)
-        ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC
+        f"""
+        SELECT
+            ia.id,
+            ia.headline,
+            ia.summary,
+            ia.url,
+            ia.source_name,
+            ia.published_at,
+            ia.fetched_at,
+            ia.entity_tags,
+            ae.signal,
+            ae.sentiment_score,
+            ae.impact_score,
+            ae.cluster_key,
+            ae.confidence_score,
+            ae.thesis
+        FROM ingested_articles ia
+        LEFT JOIN article_enrichment ae
+          ON ae.article_id = ia.id
+        WHERE {where_sql}
+        ORDER BY COALESCE(ia.published_at, ia.fetched_at) DESC, ia.id DESC
         LIMIT ? OFFSET ?
         """,
-        (f"-{days_value} days", int(limit or 20), int(offset or 0)),
+        tuple(params + [int(limit or 20), int(offset or 0)]),
     )
     rows = [dict(row) for row in cur.fetchall()]
+    cur.execute("SELECT thesis_key, confidence FROM agent_theses")
+    thesis_confidence_map = {
+        normalize_thesis_key(row["thesis_key"] or ""): float(row["confidence"] or 0.5)
+        for row in cur.fetchall()
+    }
     conn.close()
     return {
         "total": total,
@@ -535,13 +590,110 @@ def list_terminal_articles(limit: int = 20, offset: int = 0, days: int = 2) -> D
             {
                 "id": int(row.get("id", 0) or 0),
                 "headline": row.get("headline", ""),
+                "summary": row.get("summary", "") or "",
                 "url": row.get("url", ""),
                 "source": row.get("source_name", ""),
                 "published_at": row.get("published_at", ""),
                 "fetched_at": row.get("fetched_at", ""),
+                "signal": row.get("signal", "") or "Neutral",
+                "sentiment_label": _sentiment_label(row.get("signal", "")),
+                "sentiment_score": float(row.get("sentiment_score", 0.0) or 0.0),
+                "impact_score": int(row.get("impact_score", 0) or 0),
+                "relevance_score": max(
+                    float(row.get("confidence_score", 0.0) or 0.0),
+                    min(1.0, float(int(row.get("impact_score", 0) or 0)) / 100.0),
+                ),
+                "cluster_key": row.get("cluster_key", "") or "",
+                "entity_tags": _loads(row.get("entity_tags", "[]")),
+                "thesis_key": row.get("thesis", "") or "",
+                "thesis_confidence": thesis_confidence_map.get(normalize_thesis_key(row.get("thesis", "") or "")),
             }
             for row in rows
         ],
+    }
+
+
+def get_terminal_article_detail(article_id: int) -> Dict:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            ia.id,
+            ia.headline,
+            ia.summary,
+            ia.url,
+            ia.source_name,
+            ia.published_at,
+            ia.fetched_at,
+            ia.entity_tags,
+            ae.signal,
+            ae.sentiment_score,
+            ae.impact_score,
+            ae.cluster_key,
+            ae.confidence_score,
+            ae.thesis,
+            ae.what_to_watch
+        FROM ingested_articles ia
+        LEFT JOIN article_enrichment ae
+          ON ae.article_id = ia.id
+        WHERE ia.id = ?
+        LIMIT 1
+        """,
+        (int(article_id or 0),),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return {}
+    item = dict(row)
+    thesis_key = normalize_thesis_key(item.get("thesis", "") or "")
+    thesis_confidence = None
+    if thesis_key:
+        cur.execute("SELECT confidence FROM agent_theses WHERE thesis_key = ? LIMIT 1", (thesis_key,))
+        thesis_row = cur.fetchone()
+        thesis_confidence = float(thesis_row["confidence"] or 0.5) if thesis_row else None
+    cur.execute(
+        """
+        SELECT thesis_key, chain_json, terminal_risk, watchlist_suggestion, reasoning_source, created_at
+        FROM reasoning_chains
+        WHERE article_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT 5
+        """,
+        (int(article_id or 0),),
+    )
+    reasoning = []
+    for reason_row in cur.fetchall():
+        reason_item = dict(reason_row)
+        try:
+            reason_item["chain"] = json.loads(reason_item.pop("chain_json") or "[]")
+        except Exception:
+            reason_item["chain"] = []
+        reasoning.append(reason_item)
+    conn.close()
+    return {
+        "id": int(item.get("id", 0) or 0),
+        "headline": item.get("headline", ""),
+        "summary": item.get("summary", "") or "",
+        "url": item.get("url", ""),
+        "source": item.get("source_name", ""),
+        "published_at": item.get("published_at", ""),
+        "fetched_at": item.get("fetched_at", ""),
+        "signal": item.get("signal", "") or "Neutral",
+        "sentiment_label": _sentiment_label(item.get("signal", "")),
+        "sentiment_score": float(item.get("sentiment_score", 0.0) or 0.0),
+        "impact_score": int(item.get("impact_score", 0) or 0),
+        "cluster_key": item.get("cluster_key", "") or "",
+        "relevance_score": max(
+            float(item.get("confidence_score", 0.0) or 0.0),
+            min(1.0, float(int(item.get("impact_score", 0) or 0)) / 100.0),
+        ),
+        "entity_tags": _loads(item.get("entity_tags", "[]")),
+        "thesis_key": item.get("thesis", "") or "",
+        "thesis_confidence": thesis_confidence,
+        "what_to_watch": item.get("what_to_watch", "") or "",
+        "reasoning": reasoning,
     }
 
 

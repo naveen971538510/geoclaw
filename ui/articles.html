@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Articles</title>
+  <style>
+    :root{--bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--green:#2fb171;--red:#d95c5c;--gray:#7d8590;--blue:#4da3ff}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:#0d131c;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none}
+    nav strong{color:#fff}
+    .page{padding:18px 20px 40px}
+    .toolbar,.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+    .toolbar{padding:12px 14px;display:grid;grid-template-columns:auto auto auto 1fr;gap:10px;align-items:center;margin-bottom:16px}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap}
+    .gc-sent-tab{background:#161f2d;border:1px solid var(--line);color:var(--muted);padding:8px 12px;border-radius:999px;cursor:pointer}
+    .gc-sent-tab.active{color:#fff;border-color:#4da3ff}
+    input,select{background:#0d131c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+    .panel{padding:14px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-size:12px;text-transform:uppercase}
+    tr.article-row{cursor:pointer}
+    .sent-bar{width:3px;border-radius:999px;height:36px;display:inline-block}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px}
+    .bar{width:110px;height:6px;background:#1b2430;border-radius:999px;overflow:hidden}
+    .bar>div{height:100%;background:var(--blue)}
+    .detail{background:#0d131c}
+    .pagination{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:7px 11px;cursor:pointer}
+    .muted{color:var(--muted)}
+    .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+    @media (max-width: 900px){.toolbar{grid-template-columns:1fr}.panel{overflow:auto}}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="toolbar">
+      <div class="tabs">
+        <button class="gc-sent-tab active" data-sent="">All</button>
+        <button class="gc-sent-tab" data-sent="positive">Positive</button>
+        <button class="gc-sent-tab" data-sent="negative">Negative</button>
+        <button class="gc-sent-tab" data-sent="neutral">Neutral</button>
+      </div>
+      <select id="gc-source-filter"><option value="">All sources</option></select>
+      <select id="gc-days-filter">
+        <option value="1">1 day</option>
+        <option value="3" selected>3 days</option>
+        <option value="7">7 days</option>
+      </select>
+      <input id="gc-article-search" placeholder="Search headlines…">
+    </div>
+    <div class="panel">
+      <div id="gc-articles-wrap">Loading articles…</div>
+      <div class="pagination">
+        <button class="btn" id="gc-prev">← Prev</button>
+        <div class="muted" id="gc-page-label">Page 1</div>
+        <button class="btn" id="gc-next">Next →</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+    let gcPage = 0;
+    const gcPageSize = 20;
+    let gcExpanded = 0;
+    let gcLastTotal = 0;
+    function sentColor(sent){ return sent === 'positive' ? '#2fb171' : (sent === 'negative' ? '#d95c5c' : '#7d8590'); }
+    function timeAgo(iso){
+      const ms = Date.parse(String(iso || ''));
+      if (!ms) return 'n/a';
+      const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      if (mins < 60) return `${mins}m ago`;
+      if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+      return `${Math.floor(mins / 1440)}d ago`;
+    }
+    async function gcLoadArticles() {
+      const days = document.getElementById('gc-days-filter')?.value || '3';
+      const sentiment = document.querySelector('.gc-sent-tab.active')?.dataset.sent || '';
+      const search = document.getElementById('gc-article-search')?.value || '';
+      const source = document.getElementById('gc-source-filter')?.value || '';
+      const params = new URLSearchParams({limit: gcPageSize, offset: gcPage * gcPageSize, days, sentiment, q: search, source});
+      const d = await fetch('/api/articles?' + params).then(r => r.json());
+      gcLastTotal = Number(d.total || 0);
+      gcRenderArticles(d.articles || [], gcLastTotal);
+      const seenSources = [...new Set((d.articles || []).map(a => a.source).filter(Boolean))];
+      const sel = document.getElementById('gc-source-filter');
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">All sources</option>' + seenSources.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+      sel.value = keep;
+    }
+    function gcRenderArticles(articles, total) {
+      const wrap = document.getElementById('gc-articles-wrap');
+      if (!articles.length) {
+        wrap.innerHTML = '<div class="muted">No articles match the current filters.</div>';
+      } else {
+        wrap.innerHTML = `<table><thead><tr><th></th><th>Headline</th><th>Source</th><th>Published</th><th>Relevance</th><th>Cluster</th><th>Thesis</th></tr></thead><tbody>
+          ${articles.map(a => `
+            <tr class="article-row" data-article="${a.id}">
+              <td><span class="sent-bar" style="background:${sentColor(a.sentiment_label)}"></span></td>
+              <td><a href="${esc(a.url || '#')}" target="_blank" rel="noopener noreferrer">${esc(a.headline || '')}</a></td>
+              <td><span class="badge">${esc(a.source || '')}</span></td>
+              <td>${esc(timeAgo(a.published_at || a.fetched_at))}</td>
+              <td><div class="bar"><div style="width:${Math.round(Number(a.relevance_score || 0) * 100)}%"></div></div></td>
+              <td><span class="badge">${esc(a.cluster_key || 'uncategorized')}</span></td>
+              <td>${a.thesis_confidence != null ? Math.round(Number(a.thesis_confidence || 0) * 100) + '%' : '—'}</td>
+            </tr>
+            ${gcExpanded === a.id ? `<tr class="detail"><td colspan="7" id="detail-${a.id}">Loading detail…</td></tr>` : ''}
+          `).join('')}
+        </tbody></table>`;
+      }
+      document.getElementById('gc-page-label').textContent = `Page ${gcPage + 1} of ${Math.max(1, Math.ceil(total / gcPageSize))}`;
+      document.getElementById('gc-prev').disabled = gcPage === 0;
+      document.getElementById('gc-next').disabled = (gcPage + 1) * gcPageSize >= total;
+      document.querySelectorAll('[data-article]').forEach(row => row.addEventListener('click', async () => {
+        gcExpanded = gcExpanded === Number(row.dataset.article) ? 0 : Number(row.dataset.article);
+        gcRenderArticles(articles, total);
+        if (gcExpanded) await gcLoadArticleDetail(gcExpanded);
+      }));
+    }
+    async function gcLoadArticleDetail(id) {
+      const holder = document.getElementById('detail-' + id);
+      if (!holder) return;
+      try {
+        const d = await fetch('/api/articles/' + id).then(r => r.json());
+        const item = d.article || d.item || {};
+        holder.innerHTML = `<div><strong>${esc(item.headline || '')}</strong></div>
+          <div class="muted" style="margin-top:6px">${esc((item.summary || '').slice(0, 300) || 'No article summary stored.')}</div>
+          <div class="tags">${(item.entity_tags || []).map(t => `<span class="badge">${esc((t.value || t) + '')}</span>`).join('')}</div>
+          <div style="margin-top:10px"><strong>Derived thesis</strong><div class="muted">${esc(item.thesis_key || 'n/a')}</div></div>
+          <div style="margin-top:10px"><strong>Reasoning chain</strong><div class="muted">${(item.reasoning || []).map(r => ((r.chain || []).map(h => `${h.hop}. ${h.from} → ${h.to}`).join(' | '))).join('<br>') || 'No reasoning stored.'}</div></div>`;
+      } catch (e) {
+        holder.innerHTML = '<div class="muted">Could not load article detail.</div>';
+      }
+    }
+    document.querySelectorAll('.gc-sent-tab').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.gc-sent-tab').forEach(x => x.classList.remove('active'));
+      btn.classList.add('active');
+      gcPage = 0;
+      gcLoadArticles();
+    }));
+    document.getElementById('gc-source-filter').addEventListener('change', () => { gcPage = 0; gcLoadArticles(); });
+    document.getElementById('gc-days-filter').addEventListener('change', () => { gcPage = 0; gcLoadArticles(); });
+    document.getElementById('gc-article-search').addEventListener('input', () => { gcPage = 0; gcLoadArticles(); });
+    document.getElementById('gc-prev').addEventListener('click', () => { gcPage = Math.max(0, gcPage - 1); gcLoadArticles(); });
+    document.getElementById('gc-next').addEventListener('click', () => { if ((gcPage + 1) * gcPageSize < gcLastTotal) { gcPage += 1; gcLoadArticles(); } });
+    gcLoadArticles().catch(() => { document.getElementById('gc-articles-wrap').innerHTML = '<div class="muted">Could not load articles.</div>'; });
+  </script>
+</body>
+</html>

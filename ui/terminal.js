@@ -1825,6 +1825,11 @@ document.getElementById('resetFiltersBtn').addEventListener('click', () => {
   document.getElementById(id).addEventListener('input', renderCards);
   document.getElementById(id).addEventListener('change', renderCards);
 });
+document.querySelectorAll('.gc-nav-link').forEach(node => {
+  const active = node.getAttribute('href') === window.location.pathname;
+  node.style.color = active ? '#e6edf3' : '#8b949e';
+  node.style.fontWeight = active ? '600' : '400';
+});
 
 scheduleRefresh();
 renderWatchlist();
