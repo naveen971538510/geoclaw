@@ -1192,3 +1192,32 @@ python3 startup.py
     - `/api/watchlist` → `200`
     - `/api/briefing/history` → `200`
     - `/api/intelligence/narratives` → `200`
+
+## Night 4 — Phase 12 Makefile + Production Files
+
+- Added `/Users/naveenkumar/GeoClaw/Makefile`
+  - targets:
+    - `install`
+    - `migrate`
+    - `start`
+    - `once`
+    - `test`
+    - `smoke`
+    - `prices`
+    - `ingest`
+    - `reason`
+    - `brief`
+    - `log`
+    - `status`
+    - `compile`
+    - `clean`
+    - `all`
+- Rewrote `/Users/naveenkumar/GeoClaw/.env.geoclaw.example`
+  - core server settings
+  - optional OpenAI config
+  - scheduler config
+  - alert delivery config
+  - core confidence/article caps
+- Verification:
+  - `make -n once` ✓
+  - `python3 -c "open('.env.geoclaw.example').read(); print('env example OK')"` ✓
