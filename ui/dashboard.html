@@ -1,0 +1,240 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1016;
+      --panel:#101722;
+      --panel-2:#161f2d;
+      --line:#263244;
+      --text:#f4f7fb;
+      --muted:#90a0b7;
+      --green:#2fb171;
+      --blue:#4da3ff;
+      --yellow:#d39a33;
+      --red:#d95c5c;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:18px;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0d131c;position:sticky;top:0;z-index:20}
+    nav a{color:#7f8da3;text-decoration:none}
+    nav a.active, nav strong{color:#fff}
+    .page{padding:18px 22px 40px}
+    .status-bar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:18px}
+    .status-pill{color:var(--green);font-weight:700}
+    .grow{flex:1}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:8px 12px;cursor:pointer}
+    .grid{display:grid;gap:14px}
+    .stats{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:18px}
+    .two-col{grid-template-columns:1.35fr 1fr}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+    .panel h2,.panel h3{margin:0 0 10px;font-size:15px}
+    .stat-card .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+    .stat-card .value{font-size:28px;font-weight:800;margin-top:4px}
+    .muted{color:var(--muted)}
+    .skeleton{height:16px;border-radius:8px;background:linear-gradient(90deg,#1b2533 0%,#243043 50%,#1b2533 100%);background-size:200% 100%;animation:shimmer 1.3s infinite}
+    @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+    .error{color:#ff8f8f}
+    .bar-row{display:grid;grid-template-columns:140px 1fr 40px;gap:10px;align-items:center;margin:8px 0}
+    .bar-shell{height:10px;border-radius:999px;background:#1b2430;overflow:hidden}
+    .bar-fill{height:100%}
+    .green{background:var(--green)} .yellow{background:var(--yellow)} .red{background:var(--red)} .blue{background:var(--blue)} .gray{background:#59667a}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-size:12px;text-transform:uppercase}
+    .confidence-shell{width:130px;height:6px;border-radius:999px;background:#1f2a38;overflow:hidden}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+    .badge.confirmed{background:rgba(47,177,113,.18);color:#91efbc}
+    .badge.active{background:rgba(77,163,255,.18);color:#a8d0ff}
+    .badge.weakened{background:rgba(211,154,51,.18);color:#ffd488}
+    .badge.superseded,.badge.stale{background:rgba(120,128,140,.18);color:#bec6d1}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0;max-height:520px;overflow:auto}
+    .mini-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+    .mini-box{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:10px}
+    .mini-box .k{color:var(--muted);font-size:11px;text-transform:uppercase}
+    .mini-box .v{font-size:18px;font-weight:700;margin-top:4px}
+    @media (max-width: 960px){.two-col{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/terminal">Terminal</a>
+    <a href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="status-bar">
+      <div class="status-pill">● Agent Live</div>
+      <div id="statusText" class="grow">Loading status…</div>
+      <button class="btn" id="runNowBtn">▶ Run Agent Now</button>
+    </div>
+
+    <section class="grid stats" id="statsGrid">
+      <div class="panel stat-card"><div class="label">Active Theses</div><div class="value" id="statTheses">…</div></div>
+      <div class="panel stat-card"><div class="label">Avg Confidence</div><div class="value" id="statConfidence">…</div></div>
+      <div class="panel stat-card"><div class="label">Articles (24h)</div><div class="value" id="statArticles">…</div></div>
+      <div class="panel stat-card"><div class="label">Pending Actions</div><div class="value" id="statActions">…</div></div>
+    </section>
+
+    <section class="panel" style="margin-bottom:18px">
+      <h2>Confidence Distribution</h2>
+      <div id="confidenceBuckets">
+        <div class="skeleton"></div>
+        <div class="skeleton" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom:18px">
+      <h2>Top Theses</h2>
+      <div id="thesisTableWrap"><div class="skeleton" style="height:180px"></div></div>
+    </section>
+
+    <section class="grid two-col">
+      <div class="panel">
+        <h2>Latest Briefing</h2>
+        <div class="muted" id="briefingMeta">Loading…</div>
+        <pre id="briefingText">Loading briefing…</pre>
+      </div>
+      <div class="panel">
+        <h2>Last Agent Run Metrics</h2>
+        <div class="mini-grid" id="summaryBoxes">
+          <div class="mini-box"><div class="k">Stories Reviewed</div><div class="v">…</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const pct = (v) => Math.round((Number(v || 0)) * 100);
+    const badgeClass = (status) => {
+      const value = String(status || 'active').toLowerCase();
+      return ['confirmed','active','weakened','superseded','stale'].includes(value) ? value : 'active';
+    };
+    const fetchJson = (url) => fetch(url).then(r => {
+      if (!r.ok) throw new Error(url + ' -> ' + r.status);
+      return r.json();
+    });
+    const timeAgo = (iso) => {
+      const ms = Date.parse(String(iso || ''));
+      if (!ms) return 'never';
+      const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return mins + 'm ago';
+      return Math.floor(mins / 60) + 'h ago';
+    };
+
+    function renderBuckets(theses){
+      const buckets = [
+        {label:'Confirmed 80–100%', color:'green', count: theses.filter(t => Number(t.confidence || 0) >= 0.8).length},
+        {label:'High 60–80%', color:'blue', count: theses.filter(t => Number(t.confidence || 0) >= 0.6 && Number(t.confidence || 0) < 0.8).length},
+        {label:'Med 40–60%', color:'yellow', count: theses.filter(t => Number(t.confidence || 0) >= 0.4 && Number(t.confidence || 0) < 0.6).length},
+        {label:'Low 20–40%', color:'red', count: theses.filter(t => Number(t.confidence || 0) >= 0.2 && Number(t.confidence || 0) < 0.4).length},
+        {label:'Weak 0–20%', color:'gray', count: theses.filter(t => Number(t.confidence || 0) < 0.2).length},
+      ];
+      const max = Math.max(1, ...buckets.map(b => b.count));
+      document.getElementById('confidenceBuckets').innerHTML = buckets.map(bucket =>
+        '<div class="bar-row"><div>' + esc(bucket.label) + '</div><div class="bar-shell"><div class="bar-fill ' + bucket.color + '" style="width:' + Math.round((bucket.count / max) * 100) + '%"></div></div><div>' + bucket.count + '</div></div>'
+      ).join('');
+    }
+
+    function renderTheses(theses){
+      const top = (theses || []).slice(0, 10);
+      if (!top.length){
+        document.getElementById('thesisTableWrap').innerHTML = '<div class="muted">No theses yet. Run the agent to build them.</div>';
+        return;
+      }
+      document.getElementById('thesisTableWrap').innerHTML = `
+        <table>
+          <thead><tr><th>Thesis</th><th>Confidence</th><th>Status</th><th>Risk</th><th>Timeframe</th></tr></thead>
+          <tbody>
+            ${top.map(item => `
+              <tr>
+                <td>${esc(item.title || item.thesis_key || item.current_claim || '').slice(0, 100)}</td>
+                <td>
+                  <div>${pct(item.confidence)}%</div>
+                  <div class="confidence-shell"><div class="bar-fill ${Number(item.confidence || 0) >= 0.7 ? 'green' : (Number(item.confidence || 0) >= 0.4 ? 'yellow' : 'red')}" style="width:${pct(item.confidence)}%"></div></div>
+                </td>
+                <td><span class="badge ${badgeClass(item.status)}">${esc(item.status || 'active')}</span></td>
+                <td>${esc(item.key_risk || item.last_update_reason || 'Monitor for follow-up')}</td>
+                <td>${esc(item.watch_for_next || 'Watch next confirming headline')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    function renderSummary(summary){
+      const item = (summary || {}).item || {};
+      const pairs = [
+        ['Stories Reviewed', item.stories_reviewed || 0],
+        ['Clusters Reviewed', item.clusters_reviewed || 0],
+        ['Theses Updated', item.theses_updated || 0],
+        ['Tasks Closed', item.tasks_closed || 0],
+        ['Actions Proposed', item.actions_proposed || 0],
+        ['LLM Path', item.llm_path || 'fallback'],
+      ];
+      document.getElementById('summaryBoxes').innerHTML = pairs.map(([k,v]) =>
+        '<div class="mini-box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(String(v)) + '</div></div>'
+      ).join('');
+    }
+
+    async function loadDashboard(){
+      try{
+        const [thesesData, agentData, briefingData, summaryData] = await Promise.all([
+          fetchJson('/terminal/theses'),
+          fetchJson('/api/agent/status'),
+          fetchJson('/agent-briefing/latest'),
+          fetchJson('/terminal/agent-summary')
+        ]);
+        const theses = thesesData.items || [];
+        const agent = agentData || {};
+        const briefing = briefingData.item || {};
+
+        document.getElementById('statusText').textContent =
+          'Last run: ' + (agent.last_run_at ? timeAgo(agent.last_run_at) : 'never') +
+          ' | Articles (24h): ' + String(agent.article_count || 0) +
+          ' | Theses: ' + String(agent.thesis_count || 0) +
+          ' | Actions pending: ' + String(agent.pending_actions || 0);
+
+        document.getElementById('statTheses').textContent = String(theses.length);
+        const avg = theses.length ? Math.round((theses.reduce((sum, item) => sum + Number(item.confidence || 0), 0) / theses.length) * 100) : 0;
+        document.getElementById('statConfidence').textContent = avg + '%';
+        document.getElementById('statArticles').textContent = String(agent.article_count || 0);
+        document.getElementById('statActions').textContent = String(agent.pending_actions || 0);
+
+        renderBuckets(theses);
+        renderTheses(theses);
+        renderSummary(summaryData);
+
+        document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';
+        document.getElementById('briefingText').textContent = briefing.briefing_text || 'No briefing text available.';
+      }catch(err){
+        document.getElementById('statusText').textContent = '⚠ Could not load dashboard';
+        document.getElementById('confidenceBuckets').innerHTML = '<div class="error">⚠ Could not load</div>';
+        document.getElementById('thesisTableWrap').innerHTML = '<div class="error">⚠ Could not load</div>';
+        document.getElementById('briefingText').textContent = '⚠ Could not load';
+      }
+    }
+
+    document.getElementById('runNowBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('runNowBtn');
+      btn.disabled = true;
+      btn.textContent = '⟳ Running…';
+      try{
+        await fetch('/agent-run-real', {method: 'POST'});
+        await loadDashboard();
+      }catch(err){
+      }finally{
+        btn.disabled = false;
+        btn.textContent = '▶ Run Agent Now';
+      }
+    });
+
+    loadDashboard();
+  </script>
+</body>
+</html>

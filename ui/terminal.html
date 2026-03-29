@@ -1,0 +1,379 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>GeoClaw Terminal</title>
+  <link rel='stylesheet' href='/terminal-ui/terminal.css'>
+</head>
+<body>
+  <nav style="display:flex;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid #263244;background:#0d131c">
+    <strong style="color:#fff">GeoClaw</strong>
+    <a href="/dashboard" style="color:#8b949e;text-decoration:none">Dashboard</a>
+    <a href="/terminal" style="color:#fff;text-decoration:none">Terminal</a>
+    <a href="/agent-runs" style="color:#8b949e;text-decoration:none">Agent Runs</a>
+  </nav>
+  <section id='marketstrip' class='ticker-ribbon'></section>
+  <div id="gc-live-bar" style="position:sticky;top:0;z-index:9999;background:#0d1117;border-bottom:1px solid #30363d;padding:6px 20px;display:flex;align-items:center;gap:16px;font-family:monospace;font-size:12px;color:#8b949e;">
+    <span id="gc-live-dot" style="color:#3fb950">●</span>
+    <span id="gc-live-text">Loading status…</span>
+    <button id="gcLiveRunBtn" style="margin-left:auto;background:#1a3a1a;border:1px solid #3fb950;color:#3fb950;padding:3px 12px;border-radius:4px;cursor:pointer;font-size:11px;">▶ Run Agent Now</button>
+  </div>
+  <div class='wrap'>
+    <div class='sticky-top'>
+      <div class='topbar bloomberg-topbar simple-topbar'>
+        <div class='topbar-main'>
+          <div class='brand-stack'>
+            <div class='title'>GeoClaw</div>
+            <div class='sub'>A simple page for watching important market and world news. Search, read, and check alerts without leaving this screen.</div>
+          </div>
+          <div class='top-search-shell'>
+            <label class='field-label' for='q'>Search stories</label>
+            <input id='q' class='input terminal-search' placeholder='Type words like oil, gold, rates, war, dollar, China...'>
+          </div>
+        </div>
+        <div>
+          <div class='top-actions'>
+            <span class='pill'>Simple view</span>
+            <button class='btn primary' id='refreshBtn'>Refresh</button>
+            <button class='btn warn' id='runAgentBtn'>Run Agent</button>
+            <button class='btn primary' id='runRealAgentBtn'>Run Real Agent</button>
+            <button class='btn ghost' id='compactModeBtn'>Compact View</button>
+            <button class='btn ghost' id='focusModeBtn'>Focus View</button>
+          </div>
+          <div class='summary-actions panel-shortcuts' style='margin-top:10px'>
+            <button class='btn small' data-overlay='summary'>Summary</button>
+            <button class='btn small' data-overlay='alerts'>Alerts</button>
+            <button class='btn small' data-overlay='theses'>Theses</button>
+            <button class='btn small' data-overlay='actions'>Actions</button>
+            <button class='btn small' data-overlay='reasoning'>Reasoning</button>
+            <button class='btn small' data-overlay='briefing'>Briefing</button>
+            <button class='btn small' data-overlay='calibration'>Calibration</button>
+            <button class='btn small' data-overlay='diff'>Run Diff</button>
+            <button class='btn small' data-overlay='source'>Data Health</button>
+            <button class='btn small' data-overlay='agent'>Agent</button>
+            <button class='btn small' data-overlay='scheduler'>Schedule</button>
+            <button class='btn small' data-overlay='changes'>Recent Changes</button>
+            <button class='btn small' data-overlay='goals'>Goals</button>
+            <button class='btn small' data-overlay='tasks'>Next Steps</button>
+            <button class='btn small' data-overlay='journal'>Journal</button>
+          </div>
+          <details class='debug-links'>
+            <summary>Debug links</summary>
+            <div class='minor-links'>
+              <a class='textlink' href='/terminal-data' target='_blank' rel='noopener noreferrer'>Raw terminal data</a>
+              <a class='textlink' href='/agent-status' target='_blank' rel='noopener noreferrer'>Raw agent status</a>
+              <a class='textlink' href='/scheduler-status' target='_blank' rel='noopener noreferrer'>Raw scheduler</a>
+              <a class='textlink' href='/source-health' target='_blank' rel='noopener noreferrer'>Raw source health</a>
+              <a class='textlink' href='/what-changed' target='_blank' rel='noopener noreferrer'>Raw recent changes</a>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <div id='warningBanner' class='banner' style='display:none'></div>
+    <div id='providerBadgeBar' class='provider-strip'></div>
+    <section class='terminal-shell'>
+      <aside class='sidebar-left'>
+        <div class='panel watchlist-box'>
+          <h3>Watchlist</h3>
+          <div class='watch-hint'>Save the words you care about most. Matching stories will stand out in the feed.</div>
+          <div class='watchlist-row'>
+            <input id='watchlistInput' class='input' placeholder='Add a word like oil, yen, tanker'>
+            <button class='btn small' id='addWatchBtn'>Add</button>
+            <button class='btn small' id='clearWatchBtn'>Clear</button>
+          </div>
+          <div class='watchlist-meta'>
+            <div id='watchlistMeta'>No watchlist terms saved yet.</div>
+            <div class='field-help'>You can add one word or paste several separated by commas.</div>
+          </div>
+          <div class='watchlist-actions'>
+            <button class='chip preset-btn' data-preset='oil'>Oil</button>
+            <button class='chip preset-btn' data-preset='gold'>Gold</button>
+            <button class='chip preset-btn' data-preset='forex'>Forex</button>
+            <button class='chip preset-btn' data-preset='rates'>Rates</button>
+            <button class='chip preset-btn' data-preset='geopolitics'>Geopolitics</button>
+          </div>
+          <div id='watchlistCloud' class='watchlist-cloud'></div>
+        </div>
+
+        <div class='panel'>
+          <h3>Quick Status</h3>
+          <div class='mini-list'>
+            <div class='mini'><div class='mini-title'>Unread Alerts</div><div class='mini-copy' id='sidebarAlertCount'>0 alerts</div></div>
+            <div class='mini'><div class='mini-title'>Agent</div><div class='mini-copy' id='sidebarAgentStatus'>Idle</div></div>
+            <div class='mini'><div class='mini-title'>Data Providers</div><div class='provider-dots' id='sidebarProviderDots'></div></div>
+          </div>
+        </div>
+
+        <div class='panel'>
+          <h3>Refresh and Safety</h3>
+          <div class='operator-strip'>
+            <label class='toggle'><input type='checkbox' id='autoRefreshToggle' checked> Auto-refresh</label>
+            <label class='toggle'><input type='checkbox' id='hideJunkToggle'> Hide junk / low quality</label>
+          </div>
+          <div class='mini' style='margin-top:10px'>
+            <div class='mini-title'>Refresh Status</div>
+            <div class='mini-copy' id='refreshStatusBox'>Auto-refresh ready.</div>
+            <div class='mini-copy' id='schedulerNextRunBox'>Scheduler next run: n/a</div>
+          </div>
+          <div class='mini' style='margin-top:10px'>
+            <div class='mini-title'>System Message</div>
+            <div class='mini-copy' id='statusBox'>Waiting for first fetch…</div>
+          </div>
+        </div>
+
+        <div class='panel'>
+          <h3>Helpful Panels</h3>
+          <div class='panel-link-list'>
+            <div class='mini-utility'><strong>Data Health</strong><span id='sourceHealthPreview'>Loading source health…</span><button class='btn small' data-overlay='source'>Open</button></div>
+            <div class='mini-utility'><strong>Recent Changes</strong><span id='whatChangedPreview'>Loading recent changes…</span><button class='btn small' data-overlay='changes'>Open</button></div>
+            <div class='mini-utility'><strong>Agent</strong><span id='agentPreview'>Loading agent summary…</span><button class='btn small' data-overlay='agent'>Open</button></div>
+            <div class='mini-utility'><strong>Schedule</strong><span id='schedulerPreview'>Loading schedule…</span><button class='btn small' data-overlay='scheduler'>Open</button></div>
+            <div class='mini-utility'><strong>Goals</strong><span id='goalsPreview'>Loading goals…</span><button class='btn small' data-overlay='goals'>Open</button></div>
+            <div class='mini-utility'><strong>Theses</strong><span id='thesesPreview'>Loading theses…</span><button class='btn small' data-overlay='theses'>Open</button></div>
+            <div class='mini-utility'><strong>Next Steps</strong><span id='tasksPreview'>Loading next actions…</span><button class='btn small' data-overlay='tasks'>Open</button></div>
+            <div class='mini-utility'><strong>Actions</strong><span id='actionsPreview'>Loading actions…</span><button class='btn small' data-overlay='actions'>Open</button></div>
+            <div class='mini-utility'><strong>Agent Summary</strong><span id='agentSummaryPreview'>Loading run summary…</span><button class='btn small' data-overlay='summary'>Open</button></div>
+            <div class='mini-utility'><strong>Briefing</strong><span id='briefingPreview'>Loading briefing…</span><button class='btn small' data-overlay='briefing'>Open</button></div>
+            <div class='mini-utility'><strong>Calibration</strong><span id='calibrationPreview'>Loading calibration…</span><button class='btn small' data-overlay='calibration'>Open</button></div>
+          </div>
+        </div>
+      </aside>
+
+      <main class='terminal-main'>
+        <section class='summary-strip bloomberg-summary'>
+          <div class='summary-card'>
+            <div class='summary-title'>What Matters Now</div>
+            <div class='summary-main' id='summaryMain'>Loading dashboard state…</div>
+            <div class='summary-note' id='summaryNote'>Fetching terminal, health, scheduler, agent, and change data.</div>
+            <div class='summary-actions'>
+              <button class='btn small' data-overlay='alerts'>Alerts</button>
+              <button class='btn small' data-overlay='changes'>Recent Changes</button>
+              <button class='btn small' data-overlay='source'>Data Health</button>
+            </div>
+          </div>
+          <div class='summary-card'>
+            <div class='summary-title'>Need Attention</div>
+            <div class='summary-main' id='agentSummaryMain'>Waiting…</div>
+            <div class='summary-note' id='agentSummaryNote'>Agent activity and recent alerts will appear here.</div>
+            <div class='summary-actions'>
+              <button class='btn small' data-overlay='alerts'>Alerts</button>
+            </div>
+          </div>
+          <div class='summary-card'>
+            <div class='summary-title'>Data Status</div>
+            <div class='summary-main' id='providerSummaryMain'>Checking…</div>
+            <div class='summary-note' id='providerSummaryNote'>This shows what is live, cached, missing, or currently limited.</div>
+          </div>
+        </section>
+
+        <section class='hero'>
+          <div class='stat'><div class='k'>Stories</div><div class='v' id='sArticles'>0</div></div>
+          <div class='stat'><div class='k'>Positive</div><div class='v' id='sBull'>0</div></div>
+          <div class='stat'><div class='k'>Negative</div><div class='v' id='sBear'>0</div></div>
+          <div class='stat'><div class='k'>Mixed</div><div class='v' id='sNeutral'>0</div></div>
+          <div class='stat'><div class='k'>Alerts</div><div class='v' id='sAlerts'>0</div></div>
+          <div class='stat'><div class='k'>Unread Alerts</div><div class='v' id='sUnreadAlerts'>0</div></div>
+        </section>
+
+        <section class='quick-filter-strip' id='quickFilterBar'>
+          <button class='chip quick-pill active' data-quick-filter='All'>All</button>
+          <button class='chip quick-pill' data-quick-filter='Markets'>Markets</button>
+          <button class='chip quick-pill' data-quick-filter='Politics'>Politics</button>
+          <button class='chip quick-pill' data-quick-filter='Energy'>Energy</button>
+          <button class='chip quick-pill' data-quick-filter='Tech'>Tech</button>
+          <button class='chip quick-pill' data-quick-filter='Contradictions'>Contradictions</button>
+        </section>
+
+        <section class='controls bloomberg-controls'>
+          <select id='signal' class='select'>
+            <option value=''>All story tone</option>
+            <option value='Bullish'>Positive</option>
+            <option value='Bearish'>Negative</option>
+            <option value='Neutral'>Mixed</option>
+          </select>
+          <select id='asset' class='select'><option value=''>All assets</option></select>
+          <select id='source' class='select'><option value=''>All sources</option></select>
+          <select id='sort' class='select'>
+            <option value='impact'>Most important first</option>
+            <option value='newest'>Newest first</option>
+            <option value='source'>Group by source</option>
+          </select>
+          <label class='toggle'><input type='checkbox' id='alertsOnly'> Alerts only</label>
+          <label class='toggle'><input type='checkbox' id='trustedOnly'> Trusted only</label>
+          <label class='toggle'><input type='checkbox' id='watchlistOnly'> Watchlist only</label>
+          <button class='btn' id='resetFiltersBtn'>Reset</button>
+        </section>
+        <div class='filter-hint' id='filterHint'>Use search, quick filters, and the checkboxes above to make the list smaller and easier to scan.</div>
+
+        <div id='resultsBar' class='results-bar'>Results: loading…</div>
+
+        <section class='content-shell'>
+          <div class='feed-column'>
+            <div class='section-intro'>
+              <h2>News to Read</h2>
+              <p>Click any story to open the full explanation in a large drawer.</p>
+            </div>
+            <div class='feed' id='feed'>
+              <div class='empty'>
+                <div class='empty-title'>Loading terminal…</div>
+                <div class='empty-sub'>Pulling current cards, source health, scheduler state, and recent changes.</div>
+              </div>
+            </div>
+          </div>
+
+          <aside class='support-column'>
+            <div class='panel'>
+              <h3>Important Alerts</h3>
+              <div id='alertList' class='mini-list'></div>
+              <div class='summary-actions'>
+                <button class='btn small' data-overlay='alerts'>Open alerts</button>
+              </div>
+            </div>
+
+            <div class='panel'>
+              <h3>What Needs Attention</h3>
+              <div class='small' id='queueSummary'>Preparing unread and important queue…</div>
+              <div id='queueList' class='mini-list' style='margin-top:12px'></div>
+              <div class='summary-actions'>
+                <button class='btn small' id='openNextUnreadBtn'>Open next unread</button>
+                <button class='btn small' id='openImportantAlertsBtn'>Open alerts</button>
+              </div>
+            </div>
+
+            <div class='panel'>
+              <h3>Simple Summary</h3>
+              <div class='panel-link-list'>
+                <div class='mini-utility'><strong>Source mix</strong><div id='sourceList'></div></div>
+                <div class='mini-utility'><strong>Asset heat</strong><div id='assetHeat'></div></div>
+                <div class='mini-utility'><strong>Agent journal</strong><div id='journalList' class='mini-list'></div><button class='btn small' data-overlay='journal'>Open</button></div>
+                <div class='mini-utility'><strong>Confirmed vs invalidated</strong><div id='outcomesPanel' class='mini-list'></div><button class='btn small' data-overlay='outcomes'>Open</button></div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <details class='advanced-shell'>
+          <summary>More detail and charts</summary>
+          <section class='secondary-grid'>
+            <div class='panel'>
+              <h3>Source Distribution</h3>
+              <div id='sourceListSecondary'></div>
+            </div>
+
+            <div class='panel'>
+              <h3>Asset Heat</h3>
+              <div id='assetHeatSecondary'></div>
+            </div>
+
+            <div class='panel'>
+              <h3>Agent Journal</h3>
+              <div id='journalListSecondary' class='mini-list'></div>
+              <div class='summary-actions'>
+                <button class='btn small' data-overlay='journal'>Open journal</button>
+              </div>
+            </div>
+
+            <div class='panel'>
+              <h3>Confirmed vs Invalidated</h3>
+              <div id='outcomesPanelSecondary' class='mini-list'></div>
+              <div class='summary-actions'>
+                <button class='btn small' data-overlay='outcomes'>Open outcomes</button>
+              </div>
+            </div>
+
+            <div class='panel chart-panel'>
+              <h3>Agent Charts</h3>
+              <div id='chartDecisionTrend'></div>
+              <div id='chartThesisOutcome' style='margin-top:12px'></div>
+              <div id='chartPriorityQueue' style='margin-top:12px'></div>
+              <div id='chartRunMetrics' style='margin-top:12px'></div>
+              <div id='chartWatchlistHits' style='margin-top:12px'></div>
+              <div id='chartSourceMix' style='margin-top:12px'></div>
+            </div>
+          </section>
+        </details>
+      </main>
+    </section>
+
+    <div class='footer'>Everything important stays on this page. Raw routes are still available for debugging when needed.</div>
+  </div>
+
+  <div id='overlay' class='overlay' aria-hidden='true'>
+    <div class='overlay-shell'>
+      <div class='overlay-head'>
+        <div class='row'>
+          <div>
+            <div class='overlay-title' id='overlayTitle'>Panel</div>
+            <div class='overlay-sub' id='overlaySubtitle'>Readable operational detail.</div>
+          </div>
+          <button class='btn small close-x' id='closeOverlayBtn'>Close</button>
+        </div>
+        <div class='overlay-actions' id='overlayActions'></div>
+      </div>
+      <div class='overlay-body' id='overlayBody'></div>
+    </div>
+  </div>
+
+  <div id='articleDrawer' class='article-drawer' aria-hidden='true'>
+    <div class='article-shell'>
+      <div class='article-head'>
+        <div class='row'>
+          <div>
+            <div class='overlay-title'>Article Detail</div>
+            <div class='overlay-sub' id='articleDrawerMeta'>Readable detail inside /terminal.</div>
+          </div>
+          <div class='actions'>
+            <button class='btn small' id='prevArticleBtn'>Previous</button>
+            <button class='btn small' id='nextArticleBtn'>Next</button>
+            <button class='btn small' id='prevUnreadBtn'>Previous unread</button>
+            <button class='btn small' id='nextUnreadBtn'>Next unread</button>
+            <button class='btn small' id='closeArticleBtn'>Close</button>
+          </div>
+        </div>
+      </div>
+      <div class='article-body' id='articleDrawerBody'></div>
+      <div class='article-foot'>
+        <div class='article-nav'>
+          <div class='small' id='articleDrawerPosition'>Article 0 of 0</div>
+          <div class='actions'>
+            <button class='btn small' id='markArticleReadBtn'>Mark alert read</button>
+            <button class='btn small' id='toggleArticleStarBtn'>Mark important</button>
+            <a class='linkbtn' id='articleExternalLink' href='#' target='_blank' rel='noopener noreferrer'>Open article</a>
+            <a class='textlink' href='/terminal-data' target='_blank' rel='noopener noreferrer'>Open raw JSON</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id='thesisDrawer' class='article-drawer' aria-hidden='true'>
+    <div class='article-shell'>
+      <div class='article-head'>
+        <div class='row'>
+          <div>
+            <div class='overlay-title' id='thesisDrawerTitle'>Thesis Detail</div>
+            <div class='overlay-sub' id='thesisDrawerMeta'>Readable thesis and action detail inside /terminal.</div>
+          </div>
+          <div class='actions'>
+            <button class='btn small' id='closeThesisBtn'>Close</button>
+          </div>
+        </div>
+      </div>
+      <div class='article-body' id='thesisDrawerBody'></div>
+      <div class='article-foot'>
+        <div class='article-nav'>
+          <div class='small' id='thesisDrawerPosition'>Detail panel</div>
+          <div class='actions' id='thesisDrawerActions'></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src='/terminal-ui/terminal.js'></script>
+</body>
+</html>
+    

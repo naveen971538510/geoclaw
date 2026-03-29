@@ -1,0 +1,770 @@
+<!-- ============================================================
+  geoclaw_terminal_widgets.html
+  Sprint: Agent Visibility
+  INJECT INSTRUCTIONS:
+    1. Paste the <style> block into your existing <head> or <style> section.
+    2. Paste the <!-- WIDGETS --> block wherever you want them to appear
+       inside terminal.html (suggested: right after your "Run Real Agent"
+       button and its existing output div).
+    3. Paste the <script> block at the bottom of your <body>, after any
+       existing scripts.
+  ============================================================ -->
+
+
+<!-- ══════════════════════════════════════════════════════════
+     STYLE — add to <head> or existing <style> block
+     ══════════════════════════════════════════════════════════ -->
+<style>
+/* ── shared palette ─────────────────────────────────────────────────── */
+:root {
+  --gc-bg        : #0d1117;
+  --gc-surface   : #161b22;
+  --gc-border    : #30363d;
+  --gc-text      : #e6edf3;
+  --gc-muted     : #8b949e;
+  --gc-accent    : #58a6ff;
+  --gc-green     : #3fb950;
+  --gc-yellow    : #d29922;
+  --gc-red       : #f85149;
+  --gc-purple    : #bc8cff;
+  --gc-radius    : 6px;
+  --gc-mono      : 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+/* ── section wrapper ─────────────────────────────────────────────────── */
+.gc-section {
+  margin: 18px 0;
+  border: 1px solid var(--gc-border);
+  border-radius: var(--gc-radius);
+  overflow: hidden;
+  font-family: var(--gc-mono);
+  font-size: 13px;
+  color: var(--gc-text);
+}
+.gc-section-header {
+  background: var(--gc-surface);
+  border-bottom: 1px solid var(--gc-border);
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  letter-spacing: .03em;
+}
+.gc-section-header .gc-badge {
+  background: var(--gc-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--gc-muted);
+}
+.gc-section-body { padding: 12px 14px; }
+
+/* ── 1. Agent Summary panel ──────────────────────────────────────────── */
+.gc-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.gc-stat {
+  background: var(--gc-bg);
+  border: 1px solid var(--gc-border);
+  border-radius: var(--gc-radius);
+  padding: 8px 10px;
+}
+.gc-stat-label { color: var(--gc-muted); font-size: 11px; margin-bottom: 3px; }
+.gc-stat-value { font-size: 20px; font-weight: 700; color: var(--gc-accent); }
+.gc-stat-value.up   { color: var(--gc-green); }
+.gc-stat-value.down { color: var(--gc-red);   }
+
+.gc-belief-box {
+  background: var(--gc-bg);
+  border: 1px solid var(--gc-border);
+  border-left: 3px solid var(--gc-yellow);
+  border-radius: var(--gc-radius);
+  padding: 9px 12px;
+  margin-top: 4px;
+}
+.gc-belief-label { color: var(--gc-yellow); font-size: 11px; margin-bottom: 4px; text-transform: uppercase; letter-spacing:.05em; }
+.gc-belief-text  { color: var(--gc-text); line-height: 1.5; }
+.gc-reason-text  { color: var(--gc-muted); font-size: 11px; margin-top: 4px; }
+
+/* ── 2. Thesis cards ─────────────────────────────────────────────────── */
+.gc-thesis-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gc-thesis-card {
+  background: var(--gc-bg);
+  border: 1px solid var(--gc-border);
+  border-radius: var(--gc-radius);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.gc-thesis-card:hover { border-color: var(--gc-accent); }
+.gc-thesis-card.selected { border-color: var(--gc-accent); background: #161b22; }
+
+.gc-thesis-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.gc-conf-bar-wrap {
+  min-width: 38px;
+  text-align: center;
+}
+.gc-conf-pct {
+  font-size: 15px;
+  font-weight: 700;
+}
+.gc-conf-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--gc-border);
+  margin-top: 3px;
+  overflow: hidden;
+}
+.gc-conf-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--gc-accent);
+  transition: width .3s;
+}
+.gc-thesis-key {
+  flex: 1;
+  line-height: 1.45;
+  font-size: 12px;
+}
+.gc-thesis-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.gc-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.gc-pill.status-active     { background:#1a3a1a; color:var(--gc-green); }
+.gc-pill.status-weakened   { background:#3a2a10; color:var(--gc-yellow); }
+.gc-pill.status-confirmed  { background:#0d2a4a; color:var(--gc-accent); }
+.gc-pill.status-superseded { background:#2a1a1a; color:var(--gc-red); }
+.gc-pill.timeframe         { background:#1a1a2a; color:var(--gc-purple); }
+.gc-pill.evidence          { background:#1a1a1a; color:var(--gc-muted); }
+.gc-thesis-reason {
+  font-size: 11px;
+  color: var(--gc-muted);
+  margin-top: 5px;
+  line-height: 1.4;
+}
+.gc-thesis-risk {
+  font-size: 11px;
+  color: var(--gc-yellow);
+  margin-top: 4px;
+}
+
+/* ── 3. Action rows ──────────────────────────────────────────────────── */
+.gc-action-row {
+  display: grid;
+  grid-template-columns: 110px 80px 80px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--gc-border);
+  font-size: 12px;
+}
+.gc-action-row:last-child { border-bottom: none; }
+.gc-action-type  { color: var(--gc-accent); font-weight: 600; }
+.gc-action-status{ }
+.gc-action-approval { }
+.gc-action-reason{ color: var(--gc-muted); line-height: 1.4; }
+.gc-approval.awaiting  { color: var(--gc-yellow); }
+.gc-approval.approved  { color: var(--gc-green);  }
+.gc-approval.rejected  { color: var(--gc-red);    }
+.gc-status.pending    { color: var(--gc-muted);   }
+.gc-status.completed  { color: var(--gc-green);   }
+.gc-status.cancelled  { color: var(--gc-red);     }
+
+/* ── 4. Drilldown panel ──────────────────────────────────────────────── */
+.gc-drilldown {
+  display: none;
+  margin-top: 8px;
+}
+.gc-drilldown.visible { display: block; }
+
+.gc-chain-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.gc-hop {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.gc-hop-num {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--gc-border);
+  color: var(--gc-muted);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.gc-hop-body { flex: 1; }
+.gc-hop-from-to {
+  font-size: 12px;
+  color: var(--gc-text);
+}
+.gc-hop-from-to .arrow { color: var(--gc-muted); margin: 0 5px; }
+.gc-hop-mechanism { font-size: 11px; color: var(--gc-muted); margin-top: 2px; line-height: 1.4; }
+.gc-hop-conf { font-size: 11px; color: var(--gc-accent); margin-top: 2px; }
+
+.gc-dd-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--gc-border);
+}
+.gc-dd-row:last-child { border-bottom: none; }
+.gc-dd-label { min-width: 90px; color: var(--gc-muted); flex-shrink: 0; }
+.gc-dd-value { color: var(--gc-text); line-height: 1.4; }
+
+/* ── 5. Diff panel ───────────────────────────────────────────────────── */
+.gc-diff-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.gc-diff-col-title {
+  color: var(--gc-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 6px;
+}
+.gc-diff-item {
+  font-size: 12px;
+  padding: 3px 0;
+  color: var(--gc-text);
+}
+.gc-diff-item .delta {
+  font-weight: 700;
+  margin-left: 5px;
+}
+.gc-diff-item .delta.pos { color: var(--gc-green); }
+.gc-diff-item .delta.neg { color: var(--gc-red); }
+.gc-diff-item .delta.neu { color: var(--gc-muted); }
+
+.gc-diff-list-title {
+  color: var(--gc-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin: 10px 0 4px;
+}
+.gc-diff-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  margin: 2px 3px 2px 0;
+}
+.gc-diff-tag.new  { background:#1a3a1a; color:var(--gc-green); }
+.gc-diff-tag.drop { background:#2a1a1a; color:var(--gc-red); }
+.gc-diff-tag.kept { background:#1a1a2a; color:var(--gc-muted); }
+
+/* ── empty / loading states ──────────────────────────────────────────── */
+.gc-empty {
+  color: var(--gc-muted);
+  font-size: 12px;
+  padding: 8px 0;
+  font-style: italic;
+}
+.gc-loading {
+  color: var(--gc-muted);
+  font-size: 12px;
+  animation: gc-pulse 1s infinite alternate;
+}
+@keyframes gc-pulse { from { opacity:.4; } to { opacity:1; } }
+</style>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     WIDGETS — paste after your "Run Real Agent" button + output div
+     ══════════════════════════════════════════════════════════ -->
+
+<!-- 1 ── Agent Summary ─────────────────────────────────────────── -->
+<div class="gc-section" id="gc-summary-section" style="display:none">
+  <div class="gc-section-header">
+    🤖 Agent Run Summary
+    <span class="gc-badge" id="gc-summary-run-badge">run —</span>
+  </div>
+  <div class="gc-section-body" id="gc-summary-body">
+    <div class="gc-loading">Loading summary…</div>
+  </div>
+</div>
+
+<!-- 2 ── Thesis Cards ───────────────────────────────────────────── -->
+<div class="gc-section" id="gc-theses-section">
+  <div class="gc-section-header">
+    🧠 Current Theses
+    <span class="gc-badge" id="gc-theses-count-badge">0</span>
+    <button onclick="gcLoadTheses()" style="margin-left:auto;background:none;border:1px solid var(--gc-border);color:var(--gc-muted);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">↺ Refresh</button>
+  </div>
+  <div class="gc-section-body">
+    <div class="gc-thesis-grid" id="gc-thesis-grid">
+      <div class="gc-loading">Loading theses…</div>
+    </div>
+    <!-- 4 ── Drilldown panel (lives inside thesis section) ─────── -->
+    <div class="gc-section" id="gc-drilldown-section" style="display:none;margin-top:12px;">
+      <div class="gc-section-header">
+        🔍 Drilldown — <span id="gc-dd-thesis-label" style="color:var(--gc-muted);font-weight:400;font-size:12px;"></span>
+        <button onclick="gcCloseDrilldown()" style="margin-left:auto;background:none;border:none;color:var(--gc-muted);cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <div class="gc-section-body" id="gc-drilldown-body">
+        <div class="gc-loading">Loading drilldown…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3 ── Action Visibility ─────────────────────────────────────── -->
+<div class="gc-section" id="gc-actions-section">
+  <div class="gc-section-header">
+    ⚡ Proposed Actions
+    <span class="gc-badge" id="gc-actions-count-badge">0</span>
+    <button onclick="gcLoadActions()" style="margin-left:auto;background:none;border:1px solid var(--gc-border);color:var(--gc-muted);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">↺ Refresh</button>
+  </div>
+  <div class="gc-section-body" id="gc-actions-body">
+    <div class="gc-loading">Loading actions…</div>
+  </div>
+</div>
+
+<!-- 5 ── Before/After Diff ─────────────────────────────────────── -->
+<div class="gc-section" id="gc-diff-section">
+  <div class="gc-section-header">
+    ⬡ Before / After Run Diff
+    <span class="gc-badge" id="gc-diff-run-badge">comparing runs —</span>
+    <button onclick="gcLoadDiff()" style="margin-left:auto;background:none;border:1px solid var(--gc-border);color:var(--gc-muted);border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">↺ Refresh</button>
+  </div>
+  <div class="gc-section-body" id="gc-diff-body">
+    <div class="gc-loading">Loading diff…</div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     SCRIPT — paste at bottom of <body>, after existing scripts
+     ══════════════════════════════════════════════════════════ -->
+<script>
+/* ── Helpers ──────────────────────────────────────────────────────── */
+function gcEl(id) { return document.getElementById(id); }
+
+function gcFetch(url) {
+  return fetch(url).then(r => r.json()).catch(err => ({ status: "error", error: String(err) }));
+}
+
+function gcDelta(n) {
+  if (n === 0) return `<span class="delta neu">±0</span>`;
+  const cls = n > 0 ? "pos" : "neg";
+  const sym = n > 0 ? "+" : "";
+  return `<span class="delta ${cls}">${sym}${n}</span>`;
+}
+
+function gcConf(c) {
+  const pct = Math.round(c * 100);
+  let col = "#58a6ff";
+  if (pct >= 70) col = "#3fb950";
+  else if (pct <= 35) col = "#f85149";
+  else if (pct <= 50) col = "#d29922";
+  return { pct, col };
+}
+
+function gcStatusPill(status) {
+  const s = (status || "").toLowerCase();
+  return `<span class="gc-pill status-${s}">${s || "active"}</span>`;
+}
+
+/* ── 1. Agent Summary ─────────────────────────────────────────────── */
+async function gcLoadSummary() {
+  const section = gcEl("gc-summary-section");
+  const body    = gcEl("gc-summary-body");
+  section.style.display = "";
+  body.innerHTML = `<div class="gc-loading">Fetching run summary…</div>`;
+
+  const data = await gcFetch("/terminal/agent-summary");
+
+  if (data.status !== "ok" || !data.summary) {
+    body.innerHTML = `<div class="gc-empty">${data.message || "No summary available."}</div>`;
+    return;
+  }
+
+  const s = data.summary;
+  gcEl("gc-summary-run-badge").textContent = `run ${s.run_id || "—"}`;
+
+  const deltaHtml = s.theses_updated_delta !== 0
+    ? ` ${gcDelta(s.theses_updated_delta)}`
+    : "";
+
+  body.innerHTML = `
+    <div class="gc-summary-grid">
+      <div class="gc-stat">
+        <div class="gc-stat-label">Stories reviewed</div>
+        <div class="gc-stat-value">${s.stories_reviewed}</div>
+      </div>
+      <div class="gc-stat">
+        <div class="gc-stat-label">Clusters reviewed</div>
+        <div class="gc-stat-value">${s.clusters_reviewed}</div>
+      </div>
+      <div class="gc-stat">
+        <div class="gc-stat-label">Theses updated</div>
+        <div class="gc-stat-value">${s.theses_updated}${deltaHtml}</div>
+      </div>
+      <div class="gc-stat">
+        <div class="gc-stat-label">Conf. adjustments</div>
+        <div class="gc-stat-value ${s.confidence_updates > 0 ? 'up' : ''}">${s.confidence_updates}</div>
+      </div>
+      <div class="gc-stat">
+        <div class="gc-stat-label">Tasks closed</div>
+        <div class="gc-stat-value ${s.tasks_closed > 0 ? 'up' : ''}">${s.tasks_closed}</div>
+      </div>
+      <div class="gc-stat">
+        <div class="gc-stat-label">Actions proposed</div>
+        <div class="gc-stat-value ${s.actions_proposed > 0 ? 'up' : ''}">${s.actions_proposed}</div>
+      </div>
+    </div>
+
+    <div class="gc-belief-box">
+      <div class="gc-belief-label">⬆ Top belief change</div>
+      <div class="gc-belief-text">${gcEscape(s.top_belief_change)}</div>
+      <div class="gc-reason-text">↳ ${gcEscape(s.top_reason)}</div>
+    </div>
+
+    ${s.all_touched && s.all_touched.length > 1 ? `
+    <div style="margin-top:10px;">
+      <div class="gc-diff-list-title">All touched theses this run</div>
+      ${s.all_touched.map(t => `<div class="gc-diff-tag kept">${gcEscape(t.slice(0, 80))}${t.length > 80 ? "…" : ""}</div>`).join("")}
+    </div>` : ""}
+
+    ${Object.keys(s.tasks_breakdown || {}).length ? `
+    <div style="margin-top:10px;font-size:11px;color:var(--gc-muted);">
+      Task closures: ${Object.entries(s.tasks_breakdown).map(([k,v]) => `${k} <strong style="color:var(--gc-text)">${v}</strong>`).join(" · ")}
+    </div>` : ""}
+  `;
+}
+
+/* ── 2. Thesis Cards ─────────────────────────────────────────────── */
+async function gcLoadTheses() {
+  const grid  = gcEl("gc-thesis-grid");
+  const badge = gcEl("gc-theses-count-badge");
+  grid.innerHTML = `<div class="gc-loading">Loading theses…</div>`;
+
+  const data = await gcFetch("/terminal/theses");
+
+  if (data.status !== "ok" || !data.theses?.length) {
+    grid.innerHTML = `<div class="gc-empty">No theses found.</div>`;
+    return;
+  }
+
+  badge.textContent = data.theses.length;
+
+  grid.innerHTML = data.theses.map(t => {
+    const { pct, col } = gcConf(t.confidence);
+    const keyShort = t.thesis_key.length > 120
+      ? t.thesis_key.slice(0, 120) + "…"
+      : t.thesis_key;
+
+    return `
+    <div class="gc-thesis-card" onclick="gcDrilldown(${JSON.stringify(t.thesis_key)})">
+      <div class="gc-thesis-top">
+        <div class="gc-conf-bar-wrap">
+          <div class="gc-conf-pct" style="color:${col}">${pct}%</div>
+          <div class="gc-conf-bar">
+            <div class="gc-conf-bar-fill" style="width:${pct}%;background:${col}"></div>
+          </div>
+        </div>
+        <div class="gc-thesis-key">${gcEscape(keyShort)}</div>
+      </div>
+      <div class="gc-thesis-meta">
+        ${gcStatusPill(t.status)}
+        ${t.timeframe ? `<span class="gc-pill timeframe">${gcEscape(t.timeframe)}</span>` : ""}
+        ${t.evidence_count ? `<span class="gc-pill evidence">${t.evidence_count} evidence</span>` : ""}
+        ${t.watchlist_suggestion ? `<span class="gc-pill evidence">👁 ${gcEscape(t.watchlist_suggestion)}</span>` : ""}
+      </div>
+      ${t.last_update_reason ? `<div class="gc-thesis-reason">↳ ${gcEscape(t.last_update_reason.slice(0,150))}${t.last_update_reason.length > 150 ? "…" : ""}</div>` : ""}
+      ${t.terminal_risk ? `<div class="gc-thesis-risk">⚠ ${gcEscape(t.terminal_risk)}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+
+/* ── 3. Action Visibility ─────────────────────────────────────────── */
+async function gcLoadActions() {
+  const body  = gcEl("gc-actions-body");
+  const badge = gcEl("gc-actions-count-badge");
+  body.innerHTML = `<div class="gc-loading">Loading actions…</div>`;
+
+  const data = await gcFetch("/terminal/actions");
+
+  if (data.status !== "ok" || !data.actions?.length) {
+    body.innerHTML = `<div class="gc-empty">No action proposals found.</div>`;
+    badge.textContent = "0";
+    return;
+  }
+
+  badge.textContent = data.actions.length;
+
+  body.innerHTML = `
+    <div style="font-size:11px;color:var(--gc-muted);margin-bottom:8px;display:grid;grid-template-columns:110px 80px 80px 1fr;gap:10px;">
+      <div>TYPE</div><div>STATUS</div><div>APPROVAL</div><div>REASON</div>
+    </div>
+    ${data.actions.map(a => `
+    <div class="gc-action-row">
+      <div class="gc-action-type">${gcEscape(a.action_type)}</div>
+      <div class="gc-action-status gc-status ${(a.status||"").toLowerCase()}">${gcEscape(a.status)}</div>
+      <div class="gc-action-approval gc-approval ${(a.approval_state||"").toLowerCase()}">${gcEscape(a.approval_state)}</div>
+      <div class="gc-action-reason">${gcEscape(a.reason || "—")}</div>
+    </div>`).join("")}
+  `;
+}
+
+/* ── 4. Drilldown ────────────────────────────────────────────────── */
+async function gcDrilldown(thesis_key) {
+  const section = gcEl("gc-drilldown-section");
+  const body    = gcEl("gc-drilldown-body");
+  const label   = gcEl("gc-dd-thesis-label");
+
+  section.style.display = "";
+  label.textContent = thesis_key.slice(0, 80) + (thesis_key.length > 80 ? "…" : "");
+  body.innerHTML = `<div class="gc-loading">Building drilldown…</div>`;
+
+  section.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  const data = await gcFetch(`/terminal/drilldown/${encodeURIComponent(thesis_key)}`);
+
+  if (data.status !== "ok") {
+    body.innerHTML = `<div class="gc-empty">Error loading drilldown.</div>`;
+    return;
+  }
+
+  const chains = data.chains || [];
+  const actions = data.actions || [];
+
+  if (!chains.length) {
+    body.innerHTML = `<div class="gc-empty">No reasoning chains found for this thesis.</div>`;
+    return;
+  }
+
+  let html = "";
+
+  chains.slice(0, 3).forEach((ch, idx) => {
+    const hops = ch.reasoning_chain || [];
+    html += `
+    <div style="margin-bottom:16px;">
+      <div class="gc-diff-list-title">Evidence ${idx + 1} — ${gcEscape(ch.created_at?.slice(0,19) || "")}</div>
+
+      <div class="gc-dd-row">
+        <div class="gc-dd-label">📰 Article</div>
+        <div class="gc-dd-value">${gcEscape(ch.article?.headline || "Unknown")}</div>
+      </div>
+      <div class="gc-dd-row">
+        <div class="gc-dd-label">🗂 Cluster</div>
+        <div class="gc-dd-value">${gcEscape(ch.cluster?.label || "Unknown")}
+          ${ch.cluster?.article_count ? `<span style="color:var(--gc-muted)"> (${ch.cluster.article_count} articles)</span>` : ""}
+        </div>
+      </div>
+      <div class="gc-dd-row">
+        <div class="gc-dd-label">🧠 Thesis</div>
+        <div class="gc-dd-value" style="color:var(--gc-accent)">${gcEscape(thesis_key.slice(0,100))}${thesis_key.length > 100 ? "…" : ""}</div>
+      </div>
+
+      ${hops.length ? `
+      <div class="gc-diff-list-title" style="margin-top:8px;">Reasoning chain</div>
+      <div class="gc-chain-wrap">
+        ${hops.map(hop => `
+        <div class="gc-hop">
+          <div class="gc-hop-num">${hop.hop}</div>
+          <div class="gc-hop-body">
+            <div class="gc-hop-from-to">
+              <span style="color:var(--gc-accent)">${gcEscape(String(hop.from||"").slice(0,60))}</span>
+              <span class="arrow">→</span>
+              <span style="color:var(--gc-purple)">${gcEscape(String(hop.to||""))}</span>
+            </div>
+            <div class="gc-hop-mechanism">${gcEscape(hop.mechanism || "")}</div>
+            <div class="gc-hop-conf">conf ${Math.round((hop.confidence||0)*100)}% · ${gcEscape(hop.timeframe||"")}</div>
+          </div>
+        </div>`).join("")}
+      </div>` : ""}
+
+      ${ch.terminal_risk ? `
+      <div class="gc-dd-row">
+        <div class="gc-dd-label">⚠ Terminal risk</div>
+        <div class="gc-dd-value" style="color:var(--gc-yellow)">${gcEscape(ch.terminal_risk)}</div>
+      </div>` : ""}
+    </div>`;
+  });
+
+  if (actions.length) {
+    html += `<div class="gc-diff-list-title" style="margin-top:10px;">Resulting actions</div>`;
+    actions.forEach(a => {
+      html += `
+      <div class="gc-action-row">
+        <div class="gc-action-type">${gcEscape(a.action_type)}</div>
+        <div class="gc-action-status gc-status ${(a.status||"").toLowerCase()}">${gcEscape(a.status)}</div>
+        <div class="gc-action-approval gc-approval ${(a.approval_state||"").toLowerCase()}">${gcEscape(a.approval_state)}</div>
+        <div class="gc-action-reason">${gcEscape(a.reason || "—")}</div>
+      </div>`;
+    });
+  }
+
+  body.innerHTML = html;
+}
+
+function gcCloseDrilldown() {
+  gcEl("gc-drilldown-section").style.display = "none";
+}
+
+/* ── 5. Before/After Diff ────────────────────────────────────────── */
+async function gcLoadDiff() {
+  const body  = gcEl("gc-diff-body");
+  const badge = gcEl("gc-diff-run-badge");
+  body.innerHTML = `<div class="gc-loading">Computing diff…</div>`;
+
+  const data = await gcFetch("/terminal/diff");
+
+  if (data.status !== "ok" || !data.diff) {
+    body.innerHTML = `<div class="gc-empty">${data.message || "Not enough runs to diff yet."}</div>`;
+    return;
+  }
+
+  const d = data.diff;
+  badge.textContent = `run ${d.prev_run?.run_id || "?"} → ${d.latest_run?.run_id || "?"}`;
+
+  const beliefs = d.beliefs || {};
+  const tasks   = d.tasks   || {};
+  const actions = d.actions || {};
+  const arts    = d.articles|| {};
+
+  body.innerHTML = `
+    <div class="gc-diff-cols">
+      <!-- Beliefs -->
+      <div>
+        <div class="gc-diff-col-title">🧠 Beliefs</div>
+        <div class="gc-diff-item">Thesis upserts ${gcDelta(beliefs.upsert_delta||0)}</div>
+        <div class="gc-diff-item">Conf. updates ${gcDelta(beliefs.confidence_update_delta||0)}</div>
+
+        ${beliefs.new_theses_touched?.length ? `
+          <div class="gc-diff-list-title">New this run</div>
+          ${beliefs.new_theses_touched.map(t =>
+            `<div class="gc-diff-tag new">${gcEscape(t.slice(0,60))}${t.length>60?"…":""}</div>`
+          ).join("")}` : ""}
+
+        ${beliefs.dropped_from_touch?.length ? `
+          <div class="gc-diff-list-title">Dropped this run</div>
+          ${beliefs.dropped_from_touch.map(t =>
+            `<div class="gc-diff-tag drop">${gcEscape(t.slice(0,60))}${t.length>60?"…":""}</div>`
+          ).join("")}` : ""}
+
+        ${beliefs.still_active?.length ? `
+          <div class="gc-diff-list-title">Still active</div>
+          ${beliefs.still_active.slice(0,4).map(t =>
+            `<div class="gc-diff-tag kept">${gcEscape(t.slice(0,55))}${t.length>55?"…":""}</div>`
+          ).join("")}
+          ${beliefs.still_active.length > 4 ? `<div style="color:var(--gc-muted);font-size:11px;">+${beliefs.still_active.length-4} more</div>` : ""}
+        ` : ""}
+      </div>
+
+      <!-- Tasks -->
+      <div>
+        <div class="gc-diff-col-title">✅ Tasks</div>
+        <div class="gc-diff-item">Stale closed ${gcDelta(tasks.stale_delta||0)}</div>
+        <div class="gc-diff-item">Superseded ${gcDelta(tasks.superseded_delta||0)}</div>
+        <div class="gc-diff-item">Completed ${gcDelta(tasks.completed_delta||0)}</div>
+        <div class="gc-diff-item">Contradicted ${gcDelta(tasks.contradicted_delta||0)}</div>
+      </div>
+
+      <!-- Actions + Articles -->
+      <div>
+        <div class="gc-diff-col-title">⚡ Actions</div>
+        <div class="gc-diff-item">New proposals ${gcDelta(actions.proposals_delta||0)}</div>
+        <div class="gc-diff-col-title" style="margin-top:14px;">📰 Articles</div>
+        <div class="gc-diff-item">Fetched ${gcDelta(arts.fetched_delta||0)}</div>
+        <div class="gc-diff-item">Kept ${gcDelta(arts.kept_delta||0)}</div>
+        <div style="margin-top:10px;font-size:11px;color:var(--gc-muted);">
+          Prev: run ${d.prev_run?.run_id || "?"}<br>
+          ${(d.prev_run?.at||"").slice(0,19).replace("T"," ")}
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:var(--gc-muted);">
+          Now: run ${d.latest_run?.run_id || "?"}<br>
+          ${(d.latest_run?.at||"").slice(0,19).replace("T"," ")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ── XSS-safe escape ─────────────────────────────────────────────── */
+function gcEscape(str) {
+  return String(str || "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;");
+}
+
+/* ── Hook into your existing "Run Real Agent" button ─────────────── */
+// INSTRUCTIONS:
+//   Find where your existing "Run Real Agent" fetch/POST resolves
+//   (the .then() or await after the agent run call) and add:
+//       gcAfterAgentRun();
+//   at that point.  OR if you call a function like runAgent(),
+//   append gcAfterAgentRun() after it returns.
+//
+//   The function below wires it automatically if your button
+//   has id="run-agent-btn" (adjust if different):
+
+(function gcBootstrap() {
+  // Load panels on page load
+  gcLoadTheses();
+  gcLoadActions();
+  gcLoadDiff();
+
+  // Hook into existing run button if present
+  const runBtn = document.getElementById("run-agent-btn")
+    || document.querySelector("[data-action='run-agent']")
+    || null;
+
+  if (runBtn) {
+    const originalClick = runBtn.onclick;
+    runBtn.addEventListener("click", function() {
+      // Wait 4 s for agent to finish then reload all panels
+      setTimeout(gcAfterAgentRun, 4000);
+    });
+  }
+})();
+
+async function gcAfterAgentRun() {
+  await gcLoadSummary();
+  await gcLoadTheses();
+  await gcLoadActions();
+  await gcLoadDiff();
+}
+</script>

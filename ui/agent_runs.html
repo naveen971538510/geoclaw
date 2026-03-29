@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Agent Runs</title>
+  <style>
+    :root{
+      --bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--blue:#4da3ff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:18px;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0d131c}
+    nav a{color:#7f8da3;text-decoration:none} nav a.active, nav strong{color:#fff}
+    .page{padding:18px 22px 40px}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-size:12px;text-transform:uppercase}
+    tr.latest{box-shadow:inset 0 0 0 1px rgba(77,163,255,.45);background:rgba(77,163,255,.08)}
+    button{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:8px;padding:5px 10px;cursor:pointer}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0d131c;border:1px solid var(--line);border-radius:12px;padding:12px}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/terminal">Terminal</a>
+    <a href="/agent-runs" class="active">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="panel">
+      <h2 style="margin-top:0">Agent Run History</h2>
+      <div class="muted" style="margin-bottom:12px">Click any row to expand the stored metrics for that run.</div>
+      <div id="runsWrap">Loading…</div>
+    </div>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    async function loadRuns(){
+      try{
+        const res = await fetch('/agent-journal');
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        const items = (data.items || []);
+        if (!items.length){
+          document.getElementById('runsWrap').innerHTML = '<div class="muted">No agent runs recorded yet.</div>';
+          return;
+        }
+        document.getElementById('runsWrap').innerHTML = `
+          <table>
+            <thead><tr><th>Run ID</th><th>Date/Time</th><th>Type</th><th>Summary</th><th>Duration</th><th>Items Fetched</th><th>Theses Updated</th><th></th></tr></thead>
+            <tbody>
+              ${items.map((item, idx) => {
+                const metrics = item.metrics || {};
+                const thesisUpdates = metrics.thesis_updates || {};
+                const thesesUpdated = Number(thesisUpdates.upserts || 0) + Number(thesisUpdates.confidence_updates || 0);
+                return `
+                  <tr class="${idx === 0 ? 'latest' : ''}">
+                    <td>${esc(String(item.run_id || item.id || 'n/a'))}</td>
+                    <td>${esc(item.created_at || '')}</td>
+                    <td>${esc(item.journal_type || 'run')}</td>
+                    <td>${esc(item.summary || '')}</td>
+                    <td>${esc(String(metrics.duration_seconds || 0))}s</td>
+                    <td>${esc(String(metrics.items_fetched || 0))}</td>
+                    <td>${esc(String(thesesUpdated))}</td>
+                    <td><button data-toggle-run="${esc(String(item.id || idx))}">View</button></td>
+                  </tr>
+                  <tr id="run-detail-${esc(String(item.id || idx))}" style="display:none">
+                    <td colspan="8"><pre>${esc(JSON.stringify(metrics, null, 2))}</pre></td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>`;
+        document.querySelectorAll('[data-toggle-run]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const row = document.getElementById('run-detail-' + btn.getAttribute('data-toggle-run'));
+            if (!row) return;
+            row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+          });
+        });
+      }catch(err){
+        document.getElementById('runsWrap').innerHTML = '<div class="muted">⚠ Could not load agent runs.</div>';
+      }
+    }
+    loadRuns();
+  </script>
+</body>
+</html>
