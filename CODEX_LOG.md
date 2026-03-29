@@ -1005,3 +1005,32 @@ python3 startup.py
     - `/terminal/theses` ✓
     - `/api/theses/{thesis_key}/history` ✓
   - note: history is currently empty because the live DB has `0` unreasoned articles at the moment, so no new confidence-log rows have been created yet in this phase.
+
+## Night 4 — Phase 6 Terminal UI Panels
+
+- Updated `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+  - added `data-panel` attributes to the top shortcut row
+  - added a top-row `Prices` shortcut button
+  - injected a live `📈 Market Prices` panel
+  - injected a live `🔔 Alerts` panel
+- Updated `/Users/naveenkumar/GeoClaw/ui/terminal.js`
+  - added `gcLoadPrices()`
+  - added `gcLoadAlerts()`
+  - added `gcDismissAlert(id)`
+  - added thesis velocity arrows in the thesis overlay cards
+  - added keyboard shortcuts:
+    - `1` summary
+    - `2` theses
+    - `3` actions
+    - `4` briefing
+    - `5` prices
+    - `6` alerts
+    - `S` focuses search
+    - `Esc` continues to close the current overlay/drawer
+  - added a `prices` overlay view so the new shortcut button opens a readable modal panel
+  - initialized 60-second polling for the bottom prices/alerts panels
+- Verification:
+  - `python3 -c "open('ui/terminal.html').read(); print('HTML readable OK')"` ✓
+  - `node --check ui/terminal.js` ✓
+  - `curl -s http://127.0.0.1:8000/terminal` ✓
+  - note: `/api/prices` is not wired yet in this continuation, so the prices panel currently fails gracefully with an unavailable message until the price API phase lands.

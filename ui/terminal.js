@@ -113,6 +113,9 @@ function gcTimeAgo(isoStr){
   if (mins < 60) return mins + 'm ago';
   return Math.floor(mins / 60) + 'h ago';
 }
+function gcEscape(value){
+  return esc(value);
+}
 function signalLabel(value){
   const raw = String(value || 'Neutral').toLowerCase();
   if (raw === 'bullish') return 'Positive';
@@ -174,6 +177,12 @@ function thesisStatusBadge(status){
   const value = String(status || 'active').toLowerCase();
   const cls = value === 'active' || value === 'tracking' ? 'status-good' : (value === 'weakened' ? 'status-warn' : 'status-bad');
   return '<span class="' + cls + '">' + esc(value) + '</span>';
+}
+function thesisVelocityArrow(value){
+  const velocity = Number(value || 0);
+  if (velocity > 0.02) return '<span style="color:#3fb950">↑</span>';
+  if (velocity < -0.02) return '<span style="color:#f85149">↓</span>';
+  return '<span style="color:#8b949e">→</span>';
 }
 function encodePath(value){
   return encodeURIComponent(String(value || ''));
@@ -483,6 +492,7 @@ function renderAgentPanels(){
 }
 async function openOverlay(section){
   await ensureOverlayData(section);
+  window.gcCurrentPanel = section;
   const overlay = document.getElementById('overlay');
   const body = document.getElementById('overlayBody');
   const title = document.getElementById('overlayTitle');
@@ -645,7 +655,7 @@ async function openOverlay(section){
     body.innerHTML = panelCard('Thesis State', theses.length
       ? theses.map(item => {
           const status = String(item.status || 'active');
-          return '<div class="mini queue-card" data-open-thesis="' + esc(item.thesis_key || '') + '"><div class="row"><div class="mini-title">' + esc(item.title || item.current_claim || item.thesis_key || '') + '</div><div>' + thesisStatusBadge(status) + '</div></div><div class="mini-copy">' + esc(item.current_claim || item.thesis_key || '') + '</div><div class="mini-copy">Evidence ' + esc(String(item.evidence_count || 0)) + ' · Contradictions ' + esc(String(item.contradiction_count || 0)) + '</div><div class="mini-copy"><em>' + esc(item.last_update_reason || 'No update reason recorded yet.') + '</em></div>' + thesisConfidenceBar(item.confidence || 0.5) + '</div>';
+          return '<div class="mini queue-card" data-open-thesis="' + esc(item.thesis_key || '') + '"><div class="row"><div class="mini-title">' + esc(item.title || item.current_claim || item.thesis_key || '') + '</div><div>' + thesisStatusBadge(status) + '</div></div><div class="mini-copy">' + esc(item.current_claim || item.thesis_key || '') + '</div><div class="mini-copy">Confidence <strong>' + esc(confidenceText(item.confidence || 0.5)) + '</strong> ' + thesisVelocityArrow(item.confidence_velocity || 0) + ' · Evidence ' + esc(String(item.evidence_count || 0)) + ' · Contradictions ' + esc(String(item.contradiction_count || 0)) + '</div><div class="mini-copy"><em>' + esc(item.last_update_reason || 'No update reason recorded yet.') + '</em></div>' + thesisConfidenceBar(item.confidence || 0.5) + '</div>';
         }).join('')
       : '<div class="empty"><div class="empty-title">No thesis records yet</div><div class="empty-sub">Run the real agent loop to build durable thesis state.</div></div>');
     setTimeout(() => {
@@ -655,6 +665,31 @@ async function openOverlay(section){
           openThesisDrawer(detail, 'thesis');
         });
       });
+    }, 0);
+    return;
+  }
+
+  if (section === 'prices'){
+    title.textContent = 'Market Prices';
+    subtitle.textContent = 'Live price context for macro, energy, volatility, FX, and risk assets.';
+    actions.innerHTML = '<a class="textlink" href="/api/prices" target="_blank" rel="noopener noreferrer">Open raw prices</a>';
+    body.innerHTML = panelCard('Price Feed', '<div id="gc-overlay-prices" class="mini"><div class="mini-copy">Loading prices…</div></div>');
+    setTimeout(async () => {
+      const shell = document.getElementById('gc-overlay-prices');
+      if (!shell) return;
+      try{
+        const data = await fetch('/api/prices').then(r => r.json());
+        const prices = data.prices || [];
+        shell.innerHTML = prices.length
+          ? prices.map(p => {
+              const col = p.change_pct > 0 ? '#3fb950' : (p.change_pct < 0 ? '#f85149' : '#8b949e');
+              const arr = p.change_pct > 0 ? '▲' : (p.change_pct < 0 ? '▼' : '─');
+              return '<div class="mini"><div class="row"><div class="mini-title">' + esc(p.symbol || '') + '</div><div style="color:' + col + '">' + arr + ' ' + esc((p.change_pct > 0 ? '+' : '') + String(Number(p.change_pct || 0).toFixed(2))) + '%</div></div><div class="mini-copy">' + esc(p.name || '') + '</div><div class="mini-copy">Price ' + esc(p.price == null ? '—' : Number(p.price).toLocaleString(undefined, {maximumFractionDigits: 2})) + '</div></div>';
+            }).join('')
+          : '<div class="mini"><div class="mini-copy">Price feed unavailable.</div></div>';
+      }catch(err){
+        shell.innerHTML = '<div class="mini"><div class="mini-copy">Price feed unavailable.</div></div>';
+      }
     }, 0);
     return;
   }
@@ -1395,6 +1430,71 @@ async function fetchJson(url, options){
   if (data.status === 'error') throw new Error(url + ' ' + (data.error || 'error'));
   return data;
 }
+async function gcLoadPrices() {
+  const body = document.getElementById('gc-prices-body');
+  const upd = document.getElementById('gc-prices-updated');
+  if (!body) return;
+  try {
+    const data = await fetch('/api/prices').then(r => r.json());
+    const prices = data.prices || [];
+    if (!prices.length) {
+      body.innerHTML = '<div style="color:#8b949e;font-size:12px;font-family:monospace;">Price feed unavailable</div>';
+      return;
+    }
+    body.innerHTML = prices.map(p => {
+      const col = p.change_pct > 0 ? '#3fb950' : (p.change_pct < 0 ? '#f85149' : '#8b949e');
+      const arr = p.change_pct > 0 ? '▲' : (p.change_pct < 0 ? '▼' : '─');
+      return `<div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px 10px;font-family:monospace;">
+        <div style="color:#8b949e;font-size:10px;">${gcEscape(p.symbol)}</div>
+        <div style="color:#e6edf3;font-size:13px;font-weight:700;">${p.price != null ? Number(p.price).toLocaleString(undefined,{maximumFractionDigits:2}) : '—'}</div>
+        <div style="color:${col};font-size:11px;">${arr} ${p.change_pct != null ? (p.change_pct > 0 ? '+' : '') + Number(p.change_pct).toFixed(2) + '%' : '—'}</div>
+        <div style="color:#8b949e;font-size:10px;margin-top:2px;">${gcEscape((p.name || '').slice(0, 18))}</div>
+      </div>`;
+    }).join('');
+    if (upd) upd.textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    body.innerHTML = '<div style="color:#f85149;font-size:12px;font-family:monospace;">⚠ Price fetch failed</div>';
+  }
+}
+async function gcLoadAlerts() {
+  const body = document.getElementById('gc-alerts-body');
+  const badge = document.getElementById('gc-alerts-badge');
+  if (!body) return;
+  try {
+    const data = await fetch('/api/alerts?limit=10').then(r => r.json());
+    const alerts = data.alerts || [];
+    const unread = alerts.filter(a => !a.resolved).length;
+    if (badge) {
+      badge.textContent = unread;
+      badge.style.display = unread > 0 ? 'inline' : 'none';
+    }
+    if (!alerts.length) {
+      body.innerHTML = '<div style="color:#3fb950;">✓ No active alerts</div>';
+      return;
+    }
+    body.innerHTML = alerts.map(a => {
+      const col = a.resolved ? '#30363d' : '#f85149';
+      const mins = Math.round((Date.now() - new Date(a.created_at)) / 60000);
+      const ago = mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`;
+      return `<div style="border-left:3px solid ${col};padding:6px 10px;margin-bottom:6px;opacity:${a.resolved ? '0.5' : '1'};">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#e6edf3;font-weight:600;">${gcEscape(a.title || a.alert_type || 'Alert')}</span>
+          <span style="color:#8b949e;font-size:10px;">${ago}</span>
+        </div>
+        <div style="color:#8b949e;margin-top:3px;font-size:11px;">${gcEscape((a.body || '').slice(0, 120) || a.alert_type || '')}</div>
+        ${!a.resolved ? `<button onclick="gcDismissAlert(${a.id})" style="margin-top:4px;background:none;border:1px solid #30363d;color:#8b949e;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:10px;">Dismiss</button>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    body.innerHTML = '<div style="color:#f85149;">⚠ Alerts unavailable</div>';
+  }
+}
+async function gcDismissAlert(id) {
+  try {
+    await fetch(`/api/alerts/${id}/dismiss`, {method:'POST'});
+    gcLoadAlerts();
+  } catch (e) {}
+}
 async function ensureOverlayData(section){
   const jobs = [];
   if (section === 'summary' && !state.agentSummary) jobs.push(fetchJson('/terminal/agent-summary').then(data => { state.agentSummary = (data || {}).item || null; }));
@@ -1604,6 +1704,20 @@ document.addEventListener('keydown', (event) => {
   const articleDrawer = document.getElementById('articleDrawer');
   const thesisDrawer = document.getElementById('thesisDrawer');
   const overlay = document.getElementById('overlay');
+  const tagName = String((event.target || {}).tagName || '').toUpperCase();
+  if (tagName !== 'INPUT' && tagName !== 'TEXTAREA'){
+    if (event.key === '1') document.querySelector('[data-panel="summary"]')?.click();
+    if (event.key === '2') document.querySelector('[data-panel="theses"]')?.click();
+    if (event.key === '3') document.querySelector('[data-panel="actions"]')?.click();
+    if (event.key === '4') document.querySelector('[data-panel="briefing"]')?.click();
+    if (event.key === '5') document.querySelector('[data-panel="prices"]')?.click();
+    if (event.key === '6') document.querySelector('[data-panel="alerts"]')?.click();
+    if (event.key === 's' || event.key === 'S'){
+      event.preventDefault();
+      document.getElementById('q')?.focus();
+      return;
+    }
+  }
   if (event.key === 'Escape' && thesisDrawer.classList.contains('open')){
     closeThesisDrawer();
     return;
@@ -1715,6 +1829,10 @@ document.getElementById('resetFiltersBtn').addEventListener('click', () => {
 scheduleRefresh();
 renderWatchlist();
 reloadAll();
+gcLoadPrices();
+gcLoadAlerts();
 gcUpdateLiveBar();
 if (liveBarTimer) clearInterval(liveBarTimer);
 liveBarTimer = setInterval(gcUpdateLiveBar, 30000);
+setInterval(gcLoadPrices, 60000);
+setInterval(gcLoadAlerts, 60000);

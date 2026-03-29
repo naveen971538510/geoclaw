@@ -43,12 +43,13 @@
             <button class='btn ghost' id='focusModeBtn'>Focus View</button>
           </div>
           <div class='summary-actions panel-shortcuts' style='margin-top:10px'>
-            <button class='btn small' data-overlay='summary'>Summary</button>
-            <button class='btn small' data-overlay='alerts'>Alerts</button>
-            <button class='btn small' data-overlay='theses'>Theses</button>
-            <button class='btn small' data-overlay='actions'>Actions</button>
+            <button class='btn small' data-overlay='summary' data-panel='summary'>Summary</button>
+            <button class='btn small' data-overlay='alerts' data-panel='alerts'>Alerts</button>
+            <button class='btn small' data-overlay='theses' data-panel='theses'>Theses</button>
+            <button class='btn small' data-overlay='actions' data-panel='actions'>Actions</button>
             <button class='btn small' data-overlay='reasoning'>Reasoning</button>
-            <button class='btn small' data-overlay='briefing'>Briefing</button>
+            <button class='btn small' data-overlay='briefing' data-panel='briefing'>Briefing</button>
+            <button class='btn small' data-overlay='prices' data-panel='prices'>Prices</button>
             <button class='btn small' data-overlay='calibration'>Calibration</button>
             <button class='btn small' data-overlay='diff'>Run Diff</button>
             <button class='btn small' data-overlay='source'>Data Health</button>
@@ -300,6 +301,28 @@
     </section>
 
     <div class='footer'>Everything important stays on this page. Raw routes are still available for debugging when needed.</div>
+  </div>
+
+  <div class="gc-section" id="gc-prices-panel" style="margin:16px 20px 0;">
+    <div class="gc-section-header" style="display:flex;align-items:center;gap:8px;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;font-family:monospace;font-size:13px;">
+      📈 Market Prices
+      <span id="gc-prices-updated" style="color:#8b949e;font-size:11px;margin-left:auto;"></span>
+      <button onclick="gcLoadPrices()" style="background:none;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">↺</button>
+    </div>
+    <div id="gc-prices-body" style="padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;background:#0d131c;border:1px solid #263244;border-top:none;">
+      <div style="color:#8b949e;font-size:12px;font-family:monospace;">Loading prices…</div>
+    </div>
+  </div>
+
+  <div class="gc-section" id="gc-alerts-panel" style="margin:16px 20px 0;">
+    <div class="gc-section-header" style="display:flex;align-items:center;gap:8px;background:#161b22;border-bottom:1px solid #30363d;padding:8px 14px;font-family:monospace;font-size:13px;">
+      🔔 Alerts
+      <span id="gc-alerts-badge" style="background:#f85149;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;display:none;">0</span>
+      <button onclick="gcLoadAlerts()" style="margin-left:auto;background:none;border:1px solid #30363d;color:#8b949e;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">↺</button>
+    </div>
+    <div id="gc-alerts-body" style="padding:12px;font-family:monospace;font-size:12px;background:#0d131c;border:1px solid #263244;border-top:none;">
+      <div style="color:#8b949e;">Loading alerts…</div>
+    </div>
   </div>
 
   <div id='overlay' class='overlay' aria-hidden='true'>
