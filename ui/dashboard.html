@@ -87,6 +87,18 @@
       <div class="panel stat-card"><div class="label">Articles (24h)</div><div class="value" id="statArticles">…</div></div>
       <div class="panel stat-card"><div class="label">Pending Actions</div><div class="value" id="statActions">…</div></div>
       <div class="panel stat-card gc-alert-card" onclick="window.location='/terminal'" style="cursor:pointer"><div class="label">Unread Alerts</div><div class="value" id="gc-stat-alerts">…</div></div>
+      <div class="panel stat-card"><div class="label">Accuracy</div><div class="value" id="gc-stat-accuracy">…</div></div>
+    </section>
+
+    <section class="grid two-col" style="margin-bottom:18px">
+      <div class="panel">
+        <h2>Narrative Clusters</h2>
+        <div id="gc-narratives"><div class="skeleton"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Current Market Regime</h2>
+        <div id="gc-regime"><div class="skeleton"></div></div>
+      </div>
     </section>
 
     <section class="panel" style="margin-bottom:18px">
@@ -218,6 +230,31 @@
         '<div class="mini-box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(String(v)) + '</div></div>'
       ).join('');
     }
+    function renderNarratives(items){
+      const el = document.getElementById('gc-narratives');
+      if (!el) return;
+      if (!items.length){
+        el.innerHTML = '<div class="muted">No narrative clusters detected yet.</div>';
+        return;
+      }
+      el.innerHTML = items.slice(0, 5).map(item => `
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;gap:8px"><strong>${esc(item.narrative)}</strong><span class="muted">${esc(String(item.thesis_count || 0))} theses ${item.trend === 'rising' ? '↑' : (item.trend === 'falling' ? '↓' : '→')}</span></div>
+          <div class="bar-shell" style="margin-top:6px"><div class="bar-fill ${Number(item.avg_confidence || 0) >= 0.65 ? 'green' : (Number(item.avg_confidence || 0) >= 0.45 ? 'yellow' : 'red')}" style="width:${pct(item.avg_confidence)}%"></div></div>
+          <div class="muted" style="margin-top:4px">${pct(item.avg_confidence)}% average confidence</div>
+        </div>
+      `).join('');
+    }
+    function renderRegime(item){
+      const el = document.getElementById('gc-regime');
+      if (!el) return;
+      const colors = {CRISIS:'#d95c5c', 'RISK-OFF':'#d39a33', CAUTIOUS:'#c9a227', NEUTRAL:'#2fb171'};
+      el.innerHTML = `
+        <div style="background:${colors[item.regime] || '#2f5c71'};padding:16px;border-radius:12px;color:#fff;font-size:28px;font-weight:800;text-align:center">${esc(item.regime || 'NEUTRAL')}</div>
+        <div style="margin-top:12px">${esc(item.description || 'No regime description available.')}</div>
+        <div class="muted" style="margin-top:8px">Risk level: ${esc(item.risk_level || 'LOW')} · Avg thesis confidence: ${pct(item.avg_thesis_confidence || 0)}%</div>
+      `;
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -255,12 +292,15 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
           fetchJson('/terminal/agent-summary'),
-          fetchJson('/api/alerts/unread/count')
+          fetchJson('/api/alerts/unread/count'),
+          fetchJson('/api/intelligence/narratives'),
+          fetchJson('/api/intelligence/regime'),
+          fetchJson('/api/intelligence/calibration')
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
@@ -281,10 +321,13 @@
         document.getElementById('gc-stat-alerts').textContent = String(alertValue);
         const alertCard = document.querySelector('.gc-alert-card');
         if (alertCard) alertCard.style.borderColor = alertValue > 0 ? '#f85149' : '#30363d';
+        document.getElementById('gc-stat-accuracy').textContent = String(Math.round(Number((calibrationData.calibration || {}).accuracy_pct || 0))) + '%';
 
         renderBuckets(theses);
         renderTheses(theses);
         renderSummary(summaryData);
+        renderNarratives(narrativesData.narratives || []);
+        renderRegime(regimeData.regime || {});
         gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';

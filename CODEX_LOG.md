@@ -1104,3 +1104,37 @@ python3 startup.py
     - `/api/articles/1` ✓
     - `/api/briefing/history` ✓
     - `/api/briefing/1` ✓
+
+## Night 4 — Phase 9 Pattern Detection + Market Regime
+
+- Added `/Users/naveenkumar/GeoClaw/services/pattern_detector.py`
+  - narrative clustering across active theses
+  - momentum shift detection from confidence velocity
+  - regime inference from thesis risk + price context
+- Added `/Users/naveenkumar/GeoClaw/services/self_calibrator.py`
+  - approximate thesis accuracy scoring using live-price context
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - added:
+    - `GET /api/prices`
+    - `GET /api/prices/{thesis_key}`
+    - `GET /api/intelligence/narratives`
+    - `GET /api/intelligence/momentum`
+    - `GET /api/intelligence/regime`
+    - `GET /api/intelligence/calibration`
+- Updated `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+  - captures price snapshots during runs
+  - records `prices_captured` in run metrics
+- Updated `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+  - added Market Intelligence row:
+    - narrative clusters panel
+    - current market regime panel
+  - added accuracy stat card driven by calibration route
+- Verification:
+  - `python3 -m py_compile services/pattern_detector.py services/self_calibrator.py services/agent_loop_service.py main.py` ✓
+  - `/api/prices` ✓
+  - `/api/prices/iran` ✓
+  - `/api/intelligence/narratives` ✓
+  - `/api/intelligence/momentum` ✓
+  - `/api/intelligence/regime` ✓
+  - `/api/intelligence/calibration` ✓
+  - `/dashboard` → `200`

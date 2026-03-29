@@ -355,6 +355,13 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     seen_action_ids = set(starting_action_ids)
     ingestion = run_agent_cycle(max_records_per_source=max_records_per_source)
     reasoning_pipeline_stats = process_unreasoned_articles(DB_PATH, max_articles=50)
+    try:
+        from services.price_feed import PriceFeed
+
+        prices_captured = int(PriceFeed().save_snapshot(DB_PATH) or 0)
+    except Exception as exc:
+        logger.warning("Price snapshot failed: %s", exc)
+        prices_captured = 0
     payload = get_terminal_payload_clean(limit=80)
     goals = list_goals(active_only=True)
     watch_targets = _normalize_targets(goals)
@@ -712,6 +719,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "research_agent_runs": research_agent_runs,
         "autonomous_goals_created": autonomous_goals_created,
         "alerts_fired": alerts_fired,
+        "prices_captured": prices_captured,
         "reasoning_chains_built": int(ingestion.get("reasoning_chains_built", 0) or 0) + int(reasoning_pipeline_stats.get("chains_written", 0) or 0),
         "reasoning_pipeline": reasoning_pipeline_stats,
         "reasoning_cap_blocks": reasoning_cap_blocks,

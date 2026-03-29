@@ -1455,6 +1455,102 @@ def api_briefing_detail(briefing_id: int):
         return JSONResponse({"status": "error", "route": "/api/briefing/detail", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/prices", response_class=JSONResponse)
+def api_prices(symbols: str = ""):
+    try:
+        from services.price_feed import PriceFeed
+        from services.goal_service import utc_now_iso
+
+        pf = PriceFeed()
+        requested = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
+        snapshot = pf.get_snapshot(requested or None)
+        return JSONResponse({"status": "ok", "prices": list(snapshot.values()), "captured_at": utc_now_iso()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/prices", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/prices/{thesis_key:path}", response_class=JSONResponse)
+def api_thesis_prices(thesis_key: str):
+    try:
+        from services.price_feed import PriceFeed
+
+        prices = PriceFeed().get_thesis_relevant_prices(thesis_key)
+        return JSONResponse({"status": "ok", "thesis_key": thesis_key, "prices": prices})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/prices/thesis", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/intelligence/narratives", response_class=JSONResponse)
+def api_intelligence_narratives():
+    try:
+        from services.pattern_detector import PatternDetector
+        from services.terminal_service import get_terminal_theses
+
+        narratives = PatternDetector().detect_narrative_cluster(get_terminal_theses(limit=500))
+        return JSONResponse({"status": "ok", "narratives": narratives})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/narratives", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/intelligence/momentum", response_class=JSONResponse)
+def api_intelligence_momentum():
+    try:
+        from services.pattern_detector import PatternDetector
+        from config import DB_PATH
+
+        shifts = PatternDetector().detect_momentum_shifts(str(DB_PATH))
+        return JSONResponse({"status": "ok", "shifts": shifts})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/momentum", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/intelligence/regime", response_class=JSONResponse)
+def api_intelligence_regime():
+    try:
+        from config import DB_PATH
+        from services.db_helpers import get_conn
+        from services.pattern_detector import PatternDetector
+        from services.price_feed import PriceFeed
+        from services.terminal_service import get_terminal_theses
+
+        theses = get_terminal_theses(limit=500)
+        snapshot = PriceFeed().get_snapshot(["^VIX", "GC=F", "CL=F", "SPY"])
+        if not snapshot:
+            conn = get_conn(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT ps.symbol, ps.price
+                FROM price_snapshots ps
+                JOIN (
+                    SELECT symbol, MAX(captured_at) AS latest_at
+                    FROM price_snapshots
+                    GROUP BY symbol
+                ) latest
+                  ON latest.symbol = ps.symbol
+                 AND latest.latest_at = ps.captured_at
+                """
+            )
+            snapshot = {row["symbol"]: {"symbol": row["symbol"], "price": row["price"]} for row in cur.fetchall()}
+            conn.close()
+        regime = PatternDetector().compute_market_regime(theses, snapshot)
+        return JSONResponse({"status": "ok", "regime": regime})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/regime", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/intelligence/calibration", response_class=JSONResponse)
+def api_intelligence_calibration():
+    try:
+        from config import DB_PATH
+        from services.self_calibrator import SelfCalibrator
+
+        calibration = SelfCalibrator().evaluate_past_theses(str(DB_PATH))
+        return JSONResponse({"status": "ok", "calibration": calibration})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/calibration", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:
