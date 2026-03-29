@@ -602,10 +602,17 @@ def terminal_data():
 @app.get("/terminal/theses", response_class=JSONResponse)
 def terminal_theses(limit: int = 80):
     try:
+        from services.cache_service import cache_get, cache_set
         from services.terminal_service import get_terminal_theses
 
+        cache_key = f"terminal_theses:{int(limit)}"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return JSONResponse(cached)
         theses = get_terminal_theses(limit=limit)
-        return JSONResponse({"status": "ok", "items": theses, "theses": theses})
+        payload = {"status": "ok", "items": theses, "theses": theses}
+        cache_set(cache_key, payload, 30)
+        return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/terminal/theses", "error": str(exc)}, status_code=500)
 
@@ -909,9 +916,15 @@ def agent_reasoning():
 @app.get("/agent-briefing/latest", response_class=JSONResponse)
 def agent_briefing_latest():
     try:
+        from services.cache_service import cache_get, cache_set
         from services.briefing_service import get_latest_briefing
 
-        return JSONResponse({"status": "ok", "item": get_latest_briefing()})
+        cached = cache_get("agent_briefing_latest")
+        if cached is not None:
+            return JSONResponse(cached)
+        payload = {"status": "ok", "item": get_latest_briefing()}
+        cache_set("agent_briefing_latest", payload, 300)
+        return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/agent-briefing/latest", "error": str(exc)}, status_code=500)
 
@@ -1000,8 +1013,10 @@ def agent_run(request: Request):
 def agent_run_now(request: Request):
     try:
         _mutation_guard(request)
+        from services.cache_service import cache_clear_prefix
         from services.agent_service import run_agent_cycle
         result = run_agent_cycle(max_records_per_source=10)
+        cache_clear_prefix("")
         return JSONResponse(
             {
                 "status": "ok",
@@ -1024,9 +1039,11 @@ def agent_run_now(request: Request):
 def agent_run_real(request: Request):
     try:
         _mutation_guard(request)
+        from services.cache_service import cache_clear_prefix
         from services.agent_loop_service import run_real_agent_loop
 
         result = run_real_agent_loop(max_records_per_source=8)
+        cache_clear_prefix("")
         return JSONResponse({"status": "ok", "route": "/agent-run-real", "result": result})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/agent-run-real", "error": str(exc)}, status_code=500)
@@ -1458,13 +1475,20 @@ def api_briefing_detail(briefing_id: int):
 @app.get("/api/prices", response_class=JSONResponse)
 def api_prices(symbols: str = ""):
     try:
+        from services.cache_service import cache_get, cache_set
         from services.price_feed import PriceFeed
         from services.goal_service import utc_now_iso
 
+        cache_key = f"api_prices:{str(symbols or '').strip()}"
+        cached = cache_get(cache_key)
+        if cached is not None:
+            return JSONResponse(cached)
         pf = PriceFeed()
         requested = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
         snapshot = pf.get_snapshot(requested or None)
-        return JSONResponse({"status": "ok", "prices": list(snapshot.values()), "captured_at": utc_now_iso()})
+        payload = {"status": "ok", "prices": list(snapshot.values()), "captured_at": utc_now_iso()}
+        cache_set(cache_key, payload, 60)
+        return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/prices", "error": str(exc)}, status_code=500)
 
@@ -1483,11 +1507,17 @@ def api_thesis_prices(thesis_key: str):
 @app.get("/api/intelligence/narratives", response_class=JSONResponse)
 def api_intelligence_narratives():
     try:
+        from services.cache_service import cache_get, cache_set
         from services.pattern_detector import PatternDetector
         from services.terminal_service import get_terminal_theses
 
+        cached = cache_get("intelligence_narratives")
+        if cached is not None:
+            return JSONResponse(cached)
         narratives = PatternDetector().detect_narrative_cluster(get_terminal_theses(limit=500))
-        return JSONResponse({"status": "ok", "narratives": narratives})
+        payload = {"status": "ok", "narratives": narratives}
+        cache_set("intelligence_narratives", payload, 300)
+        return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/intelligence/narratives", "error": str(exc)}, status_code=500)
 
@@ -1507,12 +1537,16 @@ def api_intelligence_momentum():
 @app.get("/api/intelligence/regime", response_class=JSONResponse)
 def api_intelligence_regime():
     try:
+        from services.cache_service import cache_get, cache_set
         from config import DB_PATH
         from services.db_helpers import get_conn
         from services.pattern_detector import PatternDetector
         from services.price_feed import PriceFeed
         from services.terminal_service import get_terminal_theses
 
+        cached = cache_get("intelligence_regime")
+        if cached is not None:
+            return JSONResponse(cached)
         theses = get_terminal_theses(limit=500)
         snapshot = PriceFeed().get_snapshot(["^VIX", "GC=F", "CL=F", "SPY"])
         if not snapshot:
@@ -1534,7 +1568,9 @@ def api_intelligence_regime():
             snapshot = {row["symbol"]: {"symbol": row["symbol"], "price": row["price"]} for row in cur.fetchall()}
             conn.close()
         regime = PatternDetector().compute_market_regime(theses, snapshot)
-        return JSONResponse({"status": "ok", "regime": regime})
+        payload = {"status": "ok", "regime": regime}
+        cache_set("intelligence_regime", payload, 300)
+        return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/intelligence/regime", "error": str(exc)}, status_code=500)
 

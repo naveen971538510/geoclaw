@@ -1138,3 +1138,33 @@ python3 startup.py
   - `/api/intelligence/regime` ✓
   - `/api/intelligence/calibration` ✓
   - `/dashboard` → `200`
+
+## Night 4 — Phase 10 Cache + Performance
+
+- Added `/Users/naveenkumar/GeoClaw/services/cache_service.py`
+  - simple in-memory TTL cache
+  - prefix invalidation support
+  - bounded cache eviction
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - added caching for:
+    - `/terminal/theses` (30s)
+    - `/agent-briefing/latest` (300s)
+    - `/api/prices` (60s)
+    - `/api/intelligence/narratives` (300s)
+    - `/api/intelligence/regime` (300s)
+  - clears cached responses after manual agent runs complete
+- Updated `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+  - fixed missing `logger` initialization
+  - wrapped major loop stages with step-level error recovery:
+    - ingestion
+    - reasoning
+    - actions
+    - alerts
+    - prices
+    - briefing
+    - thesis lifecycle
+  - writes `steps` status into run metrics
+- Verification:
+  - `python3 -m py_compile services/cache_service.py` ✓
+  - `python3 -m py_compile services/agent_loop_service.py` ✓
+  - `python3 -m py_compile main.py` ✓

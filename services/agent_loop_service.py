@@ -39,9 +39,12 @@ from services.reasoning_pipeline import process_unreasoned_articles
 from services.research_agent import research_thesis
 from services.reflection_service import run_reflection
 from services.db_helpers import get_conn as shared_get_conn
+from services.logging_service import get_logger
 from services.task_service import close_expired_tasks, close_tasks, create_task, list_tasks
 from services.thesis_service import get_thesis, list_theses, normalize_thesis_key, record_thesis_event, update_thesis_confidence, upsert_thesis
 from services.thesis_lifecycle import decay_stale_theses, promote_demote_theses
+
+logger = get_logger("agent_loop")
 
 
 def _journal(run_id: int, journal_type: str, summary: str, metrics: Dict):
@@ -353,19 +356,34 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     real_agent_runs = int(state.get("real_agent_runs", 0) or 0)
     starting_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     seen_action_ids = set(starting_action_ids)
-    ingestion = run_agent_cycle(max_records_per_source=max_records_per_source)
-    reasoning_pipeline_stats = process_unreasoned_articles(DB_PATH, max_articles=50)
+    step_results = {}
+    try:
+        ingestion = run_agent_cycle(max_records_per_source=max_records_per_source)
+        step_results["ingestion"] = {"status": "ok"}
+    except Exception as exc:
+        logger.error("Step ingestion failed: %s", exc, exc_info=True)
+        ingestion = {}
+        step_results["ingestion"] = {"status": "error", "error": str(exc)}
+    try:
+        reasoning_pipeline_stats = process_unreasoned_articles(DB_PATH, max_articles=50)
+        step_results["reasoning"] = {"status": "ok"}
+    except Exception as exc:
+        logger.error("Step reasoning failed: %s", exc, exc_info=True)
+        reasoning_pipeline_stats = {"processed": 0, "theses_updated": 0, "chains_written": 0}
+        step_results["reasoning"] = {"status": "error", "error": str(exc)}
     try:
         from services.price_feed import PriceFeed
 
         prices_captured = int(PriceFeed().save_snapshot(DB_PATH) or 0)
+        step_results["prices"] = {"status": "ok"}
     except Exception as exc:
         logger.warning("Price snapshot failed: %s", exc)
         prices_captured = 0
-    payload = get_terminal_payload_clean(limit=80)
-    goals = list_goals(active_only=True)
-    watch_targets = _normalize_targets(goals)
-    cards = payload.get("cards", []) or []
+        step_results["prices"] = {"status": "error", "error": str(exc)}
+    payload = {"cards": [], "stats": {}}
+    goals = []
+    watch_targets = []
+    cards = []
     decisions = []
     tasks = []
     surfaced_alerts = 0
@@ -391,159 +409,277 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     action_cap_blocks = 0
     cluster_cooldown_blocks = 0
     reasoning_cap_blocks = int(ingestion.get("reasoning_cap_blocks", 0) or 0)
+    try:
+        payload = get_terminal_payload_clean(limit=80)
+        goals = list_goals(active_only=True)
+        watch_targets = _normalize_targets(goals)
+        cards = payload.get("cards", []) or []
 
-    for card in cards[:20]:
-        identity_key = _identity_key(card)
-        if identity_key and identity_key in seen_identities:
-            continue
-        if identity_key and is_cooldown_active("cluster_review", identity_key):
-            cluster_cooldown_blocks += 1
-            continue
-        if identity_key:
-            seen_identities.add(identity_key)
-        thesis_key = normalize_thesis_key(_thesis_key(card))
-        thesis_state = get_thesis(thesis_key) if thesis_key else None
-        contradiction_meta = None
-        contradiction_resolution = ""
-        if (card.get("has_contradiction") or card.get("contradicts_narrative")) and thesis_state and thesis_state.get("current_claim"):
-            contradiction_meta = analyse_contradiction_meta(
-                _contradiction_context(card),
-                thesis_state.get("current_claim", ""),
-                cluster_key=identity_key,
-                run_state=contradiction_llm_state,
-            )
-            contradiction_resolution = str(((contradiction_meta or {}).get("analysis", {}) or {}).get("resolution", "") or "")
-            card["contradiction_resolution"] = contradiction_resolution
-            card["contradiction_note"] = str(((contradiction_meta or {}).get("analysis", {}) or {}).get("note", "") or "")
-
-        decision_shape = _decision_for_card(card, watch_targets, thesis_state=thesis_state, contradiction_resolution=contradiction_resolution)
-        decision = create_decision(
-            article_id=int(card.get("article_id", 0) or 0) or None,
-            decision_type=decision_shape["decision_type"],
-            reason=decision_shape["reason"],
-            confidence=int(card.get("confidence", 0) or 0),
-            priority_score=int(decision_shape["priority_score"]),
-            state=decision_shape["state"],
-            cluster_key=str(card.get("cluster_key", "") or ""),
-            thesis_key=thesis_key,
-        )
-        decisions.append(decision)
-        if decision_shape["decision_type"] in ("alert", "follow_up"):
-            record_prediction(
-                thesis_key or _thesis_key(card),
-                float(card.get("confidence_score", 0.5) or 0.5),
-                str(card.get("signal", "Neutral") or "Neutral"),
-                card.get("source", "unknown"),
-                card.get("llm_category", "other"),
-            )
-        surfaced_alerts += _store_loop_alert(int(card.get("article_id", 0) or 0) or None, card, decision_shape)
-        closures = _apply_task_closure_rules(card, decision_shape)
-        for key, value in closures.items():
-            closure_totals[key] += int(value or 0)
-        thesis_status = _thesis_status_for_decision(decision_shape["decision_type"], contradiction_resolution=contradiction_resolution)
-        thesis_record = thesis_state or {"thesis_key": thesis_key}
-        did_upsert_thesis = False
-        can_update_thesis = bool(thesis_key) and not is_cooldown_active("thesis_update", thesis_key)
-        if thesis_key and not can_update_thesis:
-            thesis_cap_blocks += 1
-        if thesis_key and can_update_thesis and (thesis_upserts + thesis_confidence_updates) >= int(MAX_THESIS_UPDATES_PER_RUN):
-            can_update_thesis = False
-            thesis_cap_blocks += 1
-        if can_update_thesis:
-            thesis_record = upsert_thesis(
-                thesis_key=thesis_key or card.get("headline", ""),
-                current_claim=str(card.get("thesis", "") or card.get("why_it_matters", "") or card.get("headline", "")),
-                confidence=max(0.3, min(1.0, float(card.get("confidence_score", 0.5) or 0.5))),
-                status=thesis_status,
-                evidence_delta=max(1, int(card.get("cluster_size", 1) or 1)),
-                last_article_id=int(card.get("article_id", 0) or 0) or None,
-                last_decision_id=int(decision.get("id", 0) or 0) or None,
-                notes=decision_shape["reason"] + ((" | " + card.get("contradiction_note", "")) if card.get("contradiction_note") else ""),
-                contradiction_delta=1 if contradiction_resolution == "contradiction" or decision_shape["decision_type"] == "downgrade" else 0,
-                source_name=card.get("source", "unknown"),
-                category=card.get("llm_category", "other"),
-                related_headlines=[card.get("headline", "")],
-            )
-            did_upsert_thesis = bool(thesis_record)
-            if thesis_key:
-                set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
-        if did_upsert_thesis:
-            thesis_upserts += 1
-        if thesis_record:
-            if thesis_record.get("thesis_key"):
-                thesis_keys_touched.add(str(thesis_record.get("thesis_key")))
-                candidate = dict(thesis_record)
-                candidate["status"] = thesis_status
-                if str(candidate.get("status", "") or "").lower() in ("active", "confirmed", "tracking", "contradicted"):
-                    proposal_candidates[str(thesis_record.get("thesis_key"))] = candidate
-        write_memory(
-            article_id=int(card.get("article_id", 0) or 0) or None,
-            memory_type="thesis",
-            thesis=str(card.get("thesis", "") or card.get("summary", "") or card.get("headline", "")),
-            confidence=int(card.get("confidence", 0) or 0),
-            status=thesis_status,
-            notes=decision_shape["reason"],
-            linked_decision_id=int(decision.get("id", 0) or 0) or None,
-            thesis_key=thesis_record.get("thesis_key", thesis_key),
-        )
-        if decision_shape["decision_type"] in ("queue", "alert", "follow_up", "upgrade"):
-            write_memory(
-                article_id=int(card.get("article_id", 0) or 0) or None,
-                memory_type="top_story",
-                thesis=str(card.get("headline", "") or ""),
-                confidence=int(card.get("confidence", 0) or 0),
-                status="tracked",
-                notes=decision_shape["reason"],
-                linked_decision_id=int(decision.get("id", 0) or 0) or None,
-                thesis_key=thesis_record.get("thesis_key", thesis_key),
-            )
-        if decision_shape["decision_type"] in ("queue", "alert", "follow_up", "downgrade", "upgrade", "ignore"):
-            tasks.append(_create_task_for_decision(card, decision_shape))
-
-        if card.get("alert_tags"):
-            write_memory(
-                article_id=int(card.get("article_id", 0) or 0) or None,
-                memory_type="alert_reason",
-                thesis=", ".join(card.get("alert_tags", []) or []),
-                confidence=int(card.get("confidence", 0) or 0),
-                status="remembered",
-                notes=decision_shape["reason"],
-                linked_decision_id=int(decision.get("id", 0) or 0) or None,
-                thesis_key=thesis_record.get("thesis_key", thesis_key),
-            )
-        if identity_key:
-            set_cooldown("cluster_review", identity_key, CLUSTER_COOLDOWN_MINUTES)
-
-    for thesis in list_theses(limit=40, statuses=["active", "confirmed", "tracking"]):
-        thesis_key = str(thesis.get("thesis_key", "") or "")
-        if not thesis_key or thesis_key in proposal_candidates:
-            continue
-        if float(thesis.get("confidence", 0.0) or 0.0) < float(ACTION_PROPOSAL_MIN_CONFIDENCE or 0.55):
-            continue
-        proposal_candidates[thesis_key] = thesis
-
-    for thesis in sorted(
-        proposal_candidates.values(),
-        key=lambda item: float((item or {}).get("confidence", 0.0) or 0.0),
-        reverse=True,
-    ):
-        if action_proposals_created >= int(MAX_ACTION_PROPOSALS_PER_RUN):
-            action_cap_blocks += 1
-            continue
-        action_type = _proposal_type_for_thesis(thesis)
-        if action_type:
-            cooldown = action_on_cooldown(thesis.get("thesis_key", ""), action_type, minutes=ACTION_COOLDOWN_MINUTES)
-            if cooldown.get("blocked"):
-                cooldown_blocked_actions += 1
+        for card in cards[:20]:
+            identity_key = _identity_key(card)
+            if identity_key and identity_key in seen_identities:
                 continue
-        proposed = evaluate_and_propose(thesis, decisions, db=None)
-        if proposed and proposed.get("blocked"):
-            if str(proposed.get("blocked_reason", "") or "") == "cooldown":
-                cooldown_blocked_actions += 1
-            continue
-        if proposed and int(proposed.get("id", 0) or 0) not in seen_action_ids:
-            seen_action_ids.add(int(proposed.get("id", 0) or 0))
-            action_proposals_created += 1
+            if identity_key and is_cooldown_active("cluster_review", identity_key):
+                cluster_cooldown_blocks += 1
+                continue
+            if identity_key:
+                seen_identities.add(identity_key)
+            thesis_key = normalize_thesis_key(_thesis_key(card))
+            thesis_state = get_thesis(thesis_key) if thesis_key else None
+            contradiction_meta = None
+            contradiction_resolution = ""
+            if (card.get("has_contradiction") or card.get("contradicts_narrative")) and thesis_state and thesis_state.get("current_claim"):
+                contradiction_meta = analyse_contradiction_meta(
+                    _contradiction_context(card),
+                    thesis_state.get("current_claim", ""),
+                    cluster_key=identity_key,
+                    run_state=contradiction_llm_state,
+                )
+                contradiction_resolution = str(((contradiction_meta or {}).get("analysis", {}) or {}).get("resolution", "") or "")
+                card["contradiction_resolution"] = contradiction_resolution
+                card["contradiction_note"] = str(((contradiction_meta or {}).get("analysis", {}) or {}).get("note", "") or "")
+
+            decision_shape = _decision_for_card(card, watch_targets, thesis_state=thesis_state, contradiction_resolution=contradiction_resolution)
+            decision = create_decision(
+                article_id=int(card.get("article_id", 0) or 0) or None,
+                decision_type=decision_shape["decision_type"],
+                reason=decision_shape["reason"],
+                confidence=int(card.get("confidence", 0) or 0),
+                priority_score=int(decision_shape["priority_score"]),
+                state=decision_shape["state"],
+                cluster_key=str(card.get("cluster_key", "") or ""),
+                thesis_key=thesis_key,
+            )
+            decisions.append(decision)
+            if decision_shape["decision_type"] in ("alert", "follow_up"):
+                record_prediction(
+                    thesis_key or _thesis_key(card),
+                    float(card.get("confidence_score", 0.5) or 0.5),
+                    str(card.get("signal", "Neutral") or "Neutral"),
+                    card.get("source", "unknown"),
+                    card.get("llm_category", "other"),
+                )
+            surfaced_alerts += _store_loop_alert(int(card.get("article_id", 0) or 0) or None, card, decision_shape)
+            closures = _apply_task_closure_rules(card, decision_shape)
+            for key, value in closures.items():
+                closure_totals[key] += int(value or 0)
+            thesis_status = _thesis_status_for_decision(decision_shape["decision_type"], contradiction_resolution=contradiction_resolution)
+            thesis_record = thesis_state or {"thesis_key": thesis_key}
+            did_upsert_thesis = False
+            can_update_thesis = bool(thesis_key) and not is_cooldown_active("thesis_update", thesis_key)
+            if thesis_key and not can_update_thesis:
+                thesis_cap_blocks += 1
+            if thesis_key and can_update_thesis and (thesis_upserts + thesis_confidence_updates) >= int(MAX_THESIS_UPDATES_PER_RUN):
+                can_update_thesis = False
+                thesis_cap_blocks += 1
+            if can_update_thesis:
+                thesis_record = upsert_thesis(
+                    thesis_key=thesis_key or card.get("headline", ""),
+                    current_claim=str(card.get("thesis", "") or card.get("why_it_matters", "") or card.get("headline", "")),
+                    confidence=max(0.3, min(1.0, float(card.get("confidence_score", 0.5) or 0.5))),
+                    status=thesis_status,
+                    evidence_delta=max(1, int(card.get("cluster_size", 1) or 1)),
+                    last_article_id=int(card.get("article_id", 0) or 0) or None,
+                    last_decision_id=int(decision.get("id", 0) or 0) or None,
+                    notes=decision_shape["reason"] + ((" | " + card.get("contradiction_note", "")) if card.get("contradiction_note") else ""),
+                    contradiction_delta=1 if contradiction_resolution == "contradiction" or decision_shape["decision_type"] == "downgrade" else 0,
+                    source_name=card.get("source", "unknown"),
+                    category=card.get("llm_category", "other"),
+                    related_headlines=[card.get("headline", "")],
+                )
+                did_upsert_thesis = bool(thesis_record)
+                if thesis_key:
+                    set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
+            if did_upsert_thesis:
+                thesis_upserts += 1
+            if thesis_record:
+                if thesis_record.get("thesis_key"):
+                    thesis_keys_touched.add(str(thesis_record.get("thesis_key")))
+                    candidate = dict(thesis_record)
+                    candidate["status"] = thesis_status
+                    if str(candidate.get("status", "") or "").lower() in ("active", "confirmed", "tracking", "contradicted"):
+                        proposal_candidates[str(thesis_record.get("thesis_key"))] = candidate
+            write_memory(
+                article_id=int(card.get("article_id", 0) or 0) or None,
+                memory_type="thesis",
+                thesis=str(card.get("thesis", "") or card.get("summary", "") or card.get("headline", "")),
+                confidence=int(card.get("confidence", 0) or 0),
+                status=thesis_status,
+                notes=decision_shape["reason"],
+                linked_decision_id=int(decision.get("id", 0) or 0) or None,
+                thesis_key=thesis_record.get("thesis_key", thesis_key),
+            )
+            if decision_shape["decision_type"] in ("queue", "alert", "follow_up", "upgrade"):
+                write_memory(
+                    article_id=int(card.get("article_id", 0) or 0) or None,
+                    memory_type="top_story",
+                    thesis=str(card.get("headline", "") or ""),
+                    confidence=int(card.get("confidence", 0) or 0),
+                    status="tracked",
+                    notes=decision_shape["reason"],
+                    linked_decision_id=int(decision.get("id", 0) or 0) or None,
+                    thesis_key=thesis_record.get("thesis_key", thesis_key),
+                )
+            if decision_shape["decision_type"] in ("queue", "alert", "follow_up", "downgrade", "upgrade", "ignore"):
+                tasks.append(_create_task_for_decision(card, decision_shape))
+
+            if card.get("alert_tags"):
+                write_memory(
+                    article_id=int(card.get("article_id", 0) or 0) or None,
+                    memory_type="alert_reason",
+                    thesis=", ".join(card.get("alert_tags", []) or []),
+                    confidence=int(card.get("confidence", 0) or 0),
+                    status="remembered",
+                    notes=decision_shape["reason"],
+                    linked_decision_id=int(decision.get("id", 0) or 0) or None,
+                    thesis_key=thesis_record.get("thesis_key", thesis_key),
+                )
+            if identity_key:
+                set_cooldown("cluster_review", identity_key, CLUSTER_COOLDOWN_MINUTES)
+
+        for thesis in list_theses(limit=40, statuses=["active", "confirmed", "tracking"]):
+            thesis_key = str(thesis.get("thesis_key", "") or "")
+            if not thesis_key or thesis_key in proposal_candidates:
+                continue
+            if float(thesis.get("confidence", 0.0) or 0.0) < float(ACTION_PROPOSAL_MIN_CONFIDENCE or 0.55):
+                continue
+            proposal_candidates[thesis_key] = thesis
+
+        for thesis in sorted(
+            proposal_candidates.values(),
+            key=lambda item: float((item or {}).get("confidence", 0.0) or 0.0),
+            reverse=True,
+        ):
+            if action_proposals_created >= int(MAX_ACTION_PROPOSALS_PER_RUN):
+                action_cap_blocks += 1
+                continue
+            action_type = _proposal_type_for_thesis(thesis)
+            if action_type:
+                cooldown = action_on_cooldown(thesis.get("thesis_key", ""), action_type, minutes=ACTION_COOLDOWN_MINUTES)
+                if cooldown.get("blocked"):
+                    cooldown_blocked_actions += 1
+                    continue
+            proposed = evaluate_and_propose(thesis, decisions, db=None)
+            if proposed and proposed.get("blocked"):
+                if str(proposed.get("blocked_reason", "") or "") == "cooldown":
+                    cooldown_blocked_actions += 1
+                continue
+            if proposed and int(proposed.get("id", 0) or 0) not in seen_action_ids:
+                seen_action_ids.add(int(proposed.get("id", 0) or 0))
+                action_proposals_created += 1
+
+        evaluations = evaluate_previous_items(cards, max_items=16)
+        current_cards_by_article = {int(card.get("article_id", 0) or 0): card for card in cards if int(card.get("article_id", 0) or 0)}
+
+        for decision in decisions:
+            if str(decision.get("decision_type", "") or "") != "upgrade":
+                continue
+            article_id = int(decision.get("article_id", 0) or 0)
+            card = current_cards_by_article.get(article_id, {})
+            if not card:
+                continue
+            thesis_key = normalize_thesis_key(decision.get("thesis_key", "") or _thesis_key(card))
+            if thesis_key and not is_cooldown_active("thesis_update", thesis_key) and (thesis_upserts + thesis_confidence_updates) < int(MAX_THESIS_UPDATES_PER_RUN):
+                updated = update_thesis_confidence(
+                    thesis_key,
+                    card.get("source", "unknown"),
+                    float(card.get("confidence_score", 0.5) or 0.5),
+                )
+                if updated:
+                    thesis_confidence_updates += 1
+                    thesis_keys_touched.add(str(updated.get("thesis_key", thesis_key)))
+                    set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
+            elif thesis_key:
+                thesis_cap_blocks += 1
+
+        for evaluation in evaluations:
+            outcome_status = str(evaluation.get("status", "") or "")
+            thesis_key = normalize_thesis_key(evaluation.get("thesis_key", "") or evaluation.get("thesis", ""))
+            if outcome_status in ("contradicted", "stale"):
+                record_thesis_event(
+                    thesis_key,
+                    outcome_status,
+                    evaluation.get("notes", "") or f"Evaluation marked thesis as {outcome_status}.",
+                    float(evaluation.get("confidence", 0.0) or 0.0) / (100.0 if float(evaluation.get("confidence", 0.0) or 0.0) > 1 else 1.0),
+                    0,
+                )
+            if outcome_status != "confirmed":
+                continue
+            article_id = int(evaluation.get("article_id", 0) or 0)
+            card = current_cards_by_article.get(article_id, {})
+            if thesis_key and card and not is_cooldown_active("thesis_update", thesis_key) and (thesis_upserts + thesis_confidence_updates) < int(MAX_THESIS_UPDATES_PER_RUN):
+                updated = update_thesis_confidence(
+                    thesis_key,
+                    card.get("source", "unknown"),
+                    float(card.get("confidence_score", 0.5) or 0.5),
+                )
+                if updated:
+                    thesis_confidence_updates += 1
+                    thesis_keys_touched.add(str(updated.get("thesis_key", thesis_key)))
+                    set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
+            elif thesis_key and card:
+                thesis_cap_blocks += 1
+
+        active_theses = list_theses(limit=50, statuses=["active", "tracking", "contradicted"])
+        research_runs_today = get_daily_counter("research_agent_runs")
+        for thesis in active_theses:
+            if (
+                str(thesis.get("status", "") or "").lower() == "active"
+                and int(thesis.get("evidence_count", 0) or 0) < 3
+                and float(thesis.get("confidence", 0.0) or 0.0) < 0.65
+            ):
+                thesis_key = str(thesis.get("thesis_key", "") or "")
+                if research_runs_today + research_agent_runs >= int(MAX_RESEARCH_RUNS_PER_DAY):
+                    research_cap_blocks += 1
+                    continue
+                if thesis_key and is_cooldown_active("thesis_research", thesis_key):
+                    research_cap_blocks += 1
+                    continue
+                research_result = research_thesis(
+                    thesis_key,
+                    thesis.get("current_claim", ""),
+                    thesis.get("category", "other"),
+                )
+                research_agent_runs += int((research_result.get("metrics", {}) or {}).get("research_agent_runs", 0) or 0)
+                if thesis_key:
+                    set_cooldown("thesis_research", thesis_key, THESIS_COOLDOWN_MINUTES)
+                if research_agent_runs:
+                    bump_daily_counter("research_agent_runs", int((research_result.get("metrics", {}) or {}).get("research_agent_runs", 0) or 1))
+
+        for thesis in list_theses(limit=50, statuses=["contradicted"]):
+            if action_proposals_created >= int(MAX_ACTION_PROPOSALS_PER_RUN):
+                action_cap_blocks += 1
+                continue
+            action_type = _proposal_type_for_thesis(thesis)
+            if action_type:
+                cooldown = action_on_cooldown(thesis.get("thesis_key", ""), action_type, minutes=ACTION_COOLDOWN_MINUTES)
+                if cooldown.get("blocked"):
+                    cooldown_blocked_actions += 1
+                    continue
+            proposed = evaluate_and_propose(thesis, decisions, db=None)
+            if proposed and proposed.get("blocked"):
+                if str(proposed.get("blocked_reason", "") or "") == "cooldown":
+                    cooldown_blocked_actions += 1
+                continue
+            if proposed and int(proposed.get("id", 0) or 0) not in seen_action_ids:
+                seen_action_ids.add(int(proposed.get("id", 0) or 0))
+                action_proposals_created += 1
+
+        if real_agent_runs % 5 == 0:
+            reflection_metrics = run_reflection()
+        if real_agent_runs % 3 == 0:
+            goals_remaining = max(0, int(MAX_AUTONOMOUS_GOALS_PER_DAY) - int(get_daily_counter("autonomous_goals_created") or 0))
+            if goals_remaining <= 0:
+                goal_cap_blocks += 1
+            else:
+                created_goals = generate_autonomous_goals(limit_new=min(3, goals_remaining))
+                autonomous_goals_created = len(created_goals)
+                if autonomous_goals_created:
+                    bump_daily_counter("autonomous_goals_created", autonomous_goals_created)
+        step_results["actions"] = {"status": "ok"}
+    except Exception as exc:
+        logger.error("Step actions failed: %s", exc, exc_info=True)
+        step_results["actions"] = {"status": "error", "error": str(exc)}
 
     try:
         from services.alert_service import AlertService
@@ -563,141 +699,46 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         actions_for_alerts = [dict(row) for row in alert_cur.fetchall()]
         alert_conn.close()
         alerts_fired = int(alerter.evaluate_theses(theses_for_alerts) or 0) + int(alerter.evaluate_actions(actions_for_alerts) or 0)
+        step_results["alerts"] = {"status": "ok"}
     except Exception as exc:
         logger.warning("Alert step failed: %s", exc)
         alerts_fired = 0
+        step_results["alerts"] = {"status": "error", "error": str(exc)}
 
-    evaluations = evaluate_previous_items(cards, max_items=16)
-    current_cards_by_article = {int(card.get("article_id", 0) or 0): card for card in cards if int(card.get("article_id", 0) or 0)}
-
-    for decision in decisions:
-        if str(decision.get("decision_type", "") or "") != "upgrade":
-            continue
-        article_id = int(decision.get("article_id", 0) or 0)
-        card = current_cards_by_article.get(article_id, {})
-        if not card:
-            continue
-        thesis_key = normalize_thesis_key(decision.get("thesis_key", "") or _thesis_key(card))
-        if thesis_key and not is_cooldown_active("thesis_update", thesis_key) and (thesis_upserts + thesis_confidence_updates) < int(MAX_THESIS_UPDATES_PER_RUN):
-            updated = update_thesis_confidence(
-                thesis_key,
-                card.get("source", "unknown"),
-                float(card.get("confidence_score", 0.5) or 0.5),
-            )
-            if updated:
-                thesis_confidence_updates += 1
-                thesis_keys_touched.add(str(updated.get("thesis_key", thesis_key)))
-                set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
-        elif thesis_key:
-            thesis_cap_blocks += 1
-
-    for evaluation in evaluations:
-        outcome_status = str(evaluation.get("status", "") or "")
-        thesis_key = normalize_thesis_key(evaluation.get("thesis_key", "") or evaluation.get("thesis", ""))
-        if outcome_status in ("contradicted", "stale"):
-            record_thesis_event(
-                thesis_key,
-                outcome_status,
-                evaluation.get("notes", "") or f"Evaluation marked thesis as {outcome_status}.",
-                float(evaluation.get("confidence", 0.0) or 0.0) / (100.0 if float(evaluation.get("confidence", 0.0) or 0.0) > 1 else 1.0),
-                0,
-            )
-        if outcome_status != "confirmed":
-            continue
-        article_id = int(evaluation.get("article_id", 0) or 0)
-        card = current_cards_by_article.get(article_id, {})
-        if thesis_key and card and not is_cooldown_active("thesis_update", thesis_key) and (thesis_upserts + thesis_confidence_updates) < int(MAX_THESIS_UPDATES_PER_RUN):
-            updated = update_thesis_confidence(
-                thesis_key,
-                card.get("source", "unknown"),
-                float(card.get("confidence_score", 0.5) or 0.5),
-            )
-            if updated:
-                thesis_confidence_updates += 1
-                thesis_keys_touched.add(str(updated.get("thesis_key", thesis_key)))
-                set_cooldown("thesis_update", thesis_key, THESIS_COOLDOWN_MINUTES)
-        elif thesis_key and card:
-            thesis_cap_blocks += 1
-
-    active_theses = list_theses(limit=50, statuses=["active", "tracking", "contradicted"])
-    research_runs_today = get_daily_counter("research_agent_runs")
-    for thesis in active_theses:
-        if (
-            str(thesis.get("status", "") or "").lower() == "active"
-            and int(thesis.get("evidence_count", 0) or 0) < 3
-            and float(thesis.get("confidence", 0.0) or 0.0) < 0.65
-        ):
-            thesis_key = str(thesis.get("thesis_key", "") or "")
-            if research_runs_today + research_agent_runs >= int(MAX_RESEARCH_RUNS_PER_DAY):
-                research_cap_blocks += 1
-                continue
-            if thesis_key and is_cooldown_active("thesis_research", thesis_key):
-                research_cap_blocks += 1
-                continue
-            research_result = research_thesis(
-                thesis_key,
-                thesis.get("current_claim", ""),
-                thesis.get("category", "other"),
-            )
-            research_agent_runs += int((research_result.get("metrics", {}) or {}).get("research_agent_runs", 0) or 0)
-            if thesis_key:
-                set_cooldown("thesis_research", thesis_key, THESIS_COOLDOWN_MINUTES)
-            if research_agent_runs:
-                bump_daily_counter("research_agent_runs", int((research_result.get("metrics", {}) or {}).get("research_agent_runs", 0) or 1))
-
-    for thesis in list_theses(limit=50, statuses=["contradicted"]):
-        if action_proposals_created >= int(MAX_ACTION_PROPOSALS_PER_RUN):
-            action_cap_blocks += 1
-            continue
-        action_type = _proposal_type_for_thesis(thesis)
-        if action_type:
-            cooldown = action_on_cooldown(thesis.get("thesis_key", ""), action_type, minutes=ACTION_COOLDOWN_MINUTES)
-            if cooldown.get("blocked"):
-                cooldown_blocked_actions += 1
-                continue
-        proposed = evaluate_and_propose(thesis, decisions, db=None)
-        if proposed and proposed.get("blocked"):
-            if str(proposed.get("blocked_reason", "") or "") == "cooldown":
-                cooldown_blocked_actions += 1
-            continue
-        if proposed and int(proposed.get("id", 0) or 0) not in seen_action_ids:
-            seen_action_ids.add(int(proposed.get("id", 0) or 0))
-            action_proposals_created += 1
-
-    if real_agent_runs % 5 == 0:
-        reflection_metrics = run_reflection()
-    if real_agent_runs % 3 == 0:
-        goals_remaining = max(0, int(MAX_AUTONOMOUS_GOALS_PER_DAY) - int(get_daily_counter("autonomous_goals_created") or 0))
-        if goals_remaining <= 0:
-            goal_cap_blocks += 1
-        else:
-            created_goals = generate_autonomous_goals(limit_new=min(3, goals_remaining))
-            autonomous_goals_created = len(created_goals)
-            if autonomous_goals_created:
-                bump_daily_counter("autonomous_goals_created", autonomous_goals_created)
-
-    live_state = get_agent_state()
-    last_briefing = str(live_state.get("briefing_last_run", "") or "")
-    should_brief = True
-    if last_briefing:
-        parsed = None
-        try:
-            parsed = datetime.fromisoformat(last_briefing.replace("Z", "+00:00"))
-        except Exception:
+    try:
+        live_state = get_agent_state()
+        last_briefing = str(live_state.get("briefing_last_run", "") or "")
+        should_brief = True
+        if last_briefing:
             parsed = None
-        if parsed is not None:
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            should_brief = (datetime.now(timezone.utc) - parsed).total_seconds() >= 23 * 3600
-    if should_brief:
-        briefing = generate_daily_briefing(run_id=_latest_agent_run_id())
-        if briefing:
-            live_state["briefing_last_run"] = str(briefing.get("generated_at", "") or utc_now_iso())
-            save_agent_state(live_state)
-            briefing_created = 1
+            try:
+                parsed = datetime.fromisoformat(last_briefing.replace("Z", "+00:00"))
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                should_brief = (datetime.now(timezone.utc) - parsed).total_seconds() >= 23 * 3600
+        if should_brief:
+            briefing = generate_daily_briefing(run_id=_latest_agent_run_id())
+            if briefing:
+                live_state["briefing_last_run"] = str(briefing.get("generated_at", "") or utc_now_iso())
+                save_agent_state(live_state)
+                briefing_created = 1
+        step_results["briefing"] = {"status": "ok", "created": briefing_created}
+    except Exception as exc:
+        logger.error("Step briefing failed: %s", exc, exc_info=True)
+        step_results["briefing"] = {"status": "error", "error": str(exc)}
 
-    decay_stats = decay_stale_theses(DB_PATH)
-    promote_demote_stats = promote_demote_theses(DB_PATH)
+    try:
+        decay_stats = decay_stale_theses(DB_PATH)
+        promote_demote_stats = promote_demote_theses(DB_PATH)
+        step_results["thesis_lifecycle"] = {"status": "ok"}
+    except Exception as exc:
+        logger.error("Step thesis_lifecycle failed: %s", exc, exc_info=True)
+        decay_stats = {"decayed": 0, "superseded": 0}
+        promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
+        step_results["thesis_lifecycle"] = {"status": "error", "error": str(exc)}
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -733,6 +774,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "action_cap_blocks": action_cap_blocks,
         "cluster_cooldown_blocks": cluster_cooldown_blocks,
         "duration_seconds": duration_seconds,
+        "steps": step_results,
         "db_touched_counts": {
             "decisions": len(decisions),
             "tasks": len(tasks),
