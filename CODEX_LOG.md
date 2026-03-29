@@ -1034,3 +1034,22 @@ python3 startup.py
   - `node --check ui/terminal.js` ✓
   - `curl -s http://127.0.0.1:8000/terminal` ✓
   - note: `/api/prices` is not wired yet in this continuation, so the prices panel currently fails gracefully with an unavailable message until the price API phase lands.
+
+## Night 4 — Phase 7 Dashboard Upgrades
+
+- Reviewed the existing dashboard state before editing.
+  - already present: nav, status bar, 4 stat cards, confidence distribution, top theses table, latest briefing, last-run metric boxes
+  - missing: price ticker strip, unread alerts stat, run-activity chart
+- Updated `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+  - added top price ticker strip (`#gc-ticker`)
+  - added unread alerts stat card linking to `/terminal`
+  - added `📊 Agent Run Activity` SVG bar chart section
+  - updated dashboard JS to:
+    - fetch unread alert count
+    - render ticker content from `/api/prices` when available
+    - render 7-day run activity from `/agent-journal`
+    - accept both `items` and `theses` from `/terminal/theses`
+- Verification:
+  - `python3 -c "open('ui/dashboard.html').read(); print('OK')"` ✓
+  - `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/dashboard` → `200`
+  - `curl -s http://127.0.0.1:8000/api/alerts/unread/count | python3 -m json.tool` ✓

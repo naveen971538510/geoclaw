@@ -66,6 +66,9 @@
     <a href="/terminal">Terminal</a>
     <a href="/agent-runs">Agent Runs</a>
   </nav>
+  <div id="gc-ticker" style="background:#0d1117;border-bottom:1px solid #30363d;padding:6px 16px;font-size:11px;font-family:monospace;white-space:nowrap;overflow:hidden;color:#8b949e;">
+    <span id="gc-ticker-content">Loading prices…</span>
+  </div>
   <div class="page">
     <div class="status-bar">
       <div class="status-pill">● Agent Live</div>
@@ -78,6 +81,7 @@
       <div class="panel stat-card"><div class="label">Avg Confidence</div><div class="value" id="statConfidence">…</div></div>
       <div class="panel stat-card"><div class="label">Articles (24h)</div><div class="value" id="statArticles">…</div></div>
       <div class="panel stat-card"><div class="label">Pending Actions</div><div class="value" id="statActions">…</div></div>
+      <div class="panel stat-card gc-alert-card" onclick="window.location='/terminal'" style="cursor:pointer"><div class="label">Unread Alerts</div><div class="value" id="gc-stat-alerts">…</div></div>
     </section>
 
     <section class="panel" style="margin-bottom:18px">
@@ -106,6 +110,16 @@
         </div>
       </div>
     </section>
+
+    <section class="panel" style="margin-top:18px">
+      <h2>Agent Run Activity</h2>
+      <div style="padding:8px 0 4px;">
+        <svg id="gc-run-chart" width="100%" height="80" viewBox="0 0 700 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+          <text x="50%" y="40" text-anchor="middle" fill="#8b949e" font-size="12" font-family="monospace">Loading…</text>
+        </svg>
+        <div id="gc-run-labels" style="display:flex;justify-content:space-between;font-size:10px;color:#8b949e;font-family:monospace;margin-top:4px;"></div>
+      </div>
+    </section>
   </div>
   <script>
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -126,6 +140,19 @@
       if (mins < 60) return mins + 'm ago';
       return Math.floor(mins / 60) + 'h ago';
     };
+    async function gcLoadTicker() {
+      try {
+        const data = await fetch('/api/prices').then(r => r.json());
+        const prices = data.prices || [];
+        const parts = prices.map(p => {
+          const col = p.change_pct > 0 ? '#3fb950' : (p.change_pct < 0 ? '#f85149' : '#8b949e');
+          const arr = p.change_pct > 0 ? '▲' : (p.change_pct < 0 ? '▼' : '─');
+          return `<span style="margin-right:24px;"><span style="color:#e6edf3;font-weight:700;">${p.symbol}</span> ${p.price != null ? Number(p.price).toLocaleString(undefined,{maximumFractionDigits:2}) : '—'} <span style="color:${col}">${arr}${p.change_pct != null ? Math.abs(Number(p.change_pct)).toFixed(2) + '%' : ''}</span></span>`;
+        });
+        const el = document.getElementById('gc-ticker-content');
+        if (el) el.innerHTML = parts.join('') || 'Price feed unavailable';
+      } catch (e) {}
+    }
 
     function renderBuckets(theses){
       const buckets = [
@@ -181,16 +208,51 @@
         '<div class="mini-box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(String(v)) + '</div></div>'
       ).join('');
     }
+    async function gcLoadRunChart() {
+      try {
+        const data = await fetch('/agent-journal').then(r => r.json());
+        const items = (data.items || []).filter(i => i.journal_type === 'agent_loop');
+        const days = {};
+        const now = new Date();
+        for (let i = 6; i >= 0; i--) {
+          const dt = new Date(now);
+          dt.setDate(now.getDate() - i);
+          days[dt.toISOString().slice(0, 10)] = 0;
+        }
+        items.forEach(item => {
+          const day = String(item.created_at || '').slice(0, 10);
+          if (day in days) days[day] += 1;
+        });
+        const dayKeys = Object.keys(days).sort();
+        const counts = dayKeys.map(k => days[k]);
+        const maxVal = Math.max(...counts, 1);
+        const barW = Math.floor(700 / dayKeys.length);
+        const pad = 6;
+        const svg = document.getElementById('gc-run-chart');
+        const labels = document.getElementById('gc-run-labels');
+        if (!svg) return;
+        svg.innerHTML = dayKeys.map((day, i) => {
+          const h = Math.max(4, Math.round((counts[i] / maxVal) * 70));
+          const x = i * barW + pad;
+          const y = 80 - h;
+          return `<rect x="${x}" y="${y}" width="${barW - pad * 2}" height="${h}" fill="#3fb950" rx="2" opacity="0.8"><title>${day}: ${counts[i]} run${counts[i] !== 1 ? 's' : ''}</title></rect><text x="${x + (barW - pad * 2) / 2}" y="${y - 4}" text-anchor="middle" fill="#8b949e" font-size="9" font-family="monospace">${counts[i] > 0 ? counts[i] : ''}</text>`;
+        }).join('');
+        if (labels) {
+          labels.innerHTML = dayKeys.map(d => `<span>${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d + 'T12:00:00').getDay()]}</span>`).join('');
+        }
+      } catch (e) {}
+    }
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
-          fetchJson('/terminal/agent-summary')
+          fetchJson('/terminal/agent-summary'),
+          fetchJson('/api/alerts/unread/count')
         ]);
-        const theses = thesesData.items || [];
+        const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
         const briefing = briefingData.item || {};
 
@@ -205,10 +267,15 @@
         document.getElementById('statConfidence').textContent = avg + '%';
         document.getElementById('statArticles').textContent = String(agent.article_count || 0);
         document.getElementById('statActions').textContent = String(agent.pending_actions || 0);
+        const alertValue = Number(alertsData.count || 0);
+        document.getElementById('gc-stat-alerts').textContent = String(alertValue);
+        const alertCard = document.querySelector('.gc-alert-card');
+        if (alertCard) alertCard.style.borderColor = alertValue > 0 ? '#f85149' : '#30363d';
 
         renderBuckets(theses);
         renderTheses(theses);
         renderSummary(summaryData);
+        gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';
         document.getElementById('briefingText').textContent = briefing.briefing_text || 'No briefing text available.';
@@ -235,6 +302,8 @@
     });
 
     loadDashboard();
+    gcLoadTicker();
+    setInterval(gcLoadTicker, 60000);
   </script>
 </body>
 </html>
