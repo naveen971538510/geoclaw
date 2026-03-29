@@ -51,6 +51,7 @@ def run_migration(verbose: bool = False):
     ON ingested_articles(content_hash)
     """)
     _ensure_column(cur, "ingested_articles", "is_reasoned", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "ingested_articles", "entity_tags", "TEXT DEFAULT '[]'")
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_ingested_articles_reasoned_fetched
     ON ingested_articles(is_reasoned, fetched_at)
@@ -145,9 +146,16 @@ def run_migration(verbose: bool = False):
     _ensure_column(cur, "alert_events", "resolved", "INTEGER DEFAULT 0")
     _ensure_column(cur, "alert_events", "resolution_note", "TEXT DEFAULT ''")
     _ensure_column(cur, "alert_events", "resolved_at", "TEXT DEFAULT ''")
+    _ensure_column(cur, "alert_events", "alert_type", "TEXT DEFAULT ''")
+    _ensure_column(cur, "alert_events", "title", "TEXT DEFAULT ''")
+    _ensure_column(cur, "alert_events", "body", "TEXT DEFAULT ''")
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_alert_events_status_resolved
     ON alert_events(status, resolved, created_at)
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_alert_events_type
+    ON alert_events(alert_type, created_at DESC)
     """)
 
     cur.execute("""
@@ -263,6 +271,10 @@ def run_migration(verbose: bool = False):
     _ensure_column(cur, "agent_theses", "key_risk", "TEXT DEFAULT ''")
     _ensure_column(cur, "agent_theses", "watch_for_next", "TEXT DEFAULT ''")
     _ensure_column(cur, "agent_theses", "category", "TEXT DEFAULT 'other'")
+    _ensure_column(cur, "agent_theses", "terminal_risk", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_theses", "watchlist_suggestion", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_theses", "timeframe", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_theses", "confidence_velocity", "REAL DEFAULT 0.0")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS agent_tasks (
@@ -323,6 +335,20 @@ def run_migration(verbose: bool = False):
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_llm_usage_mode_created
     ON llm_usage_log(mode, created_at)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS llm_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model TEXT,
+        tokens INTEGER DEFAULT 0,
+        context_snippet TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        run_id INTEGER
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_llm_usage_created
+    ON llm_usage(created_at DESC)
     """)
 
     cur.execute("""
@@ -433,6 +459,7 @@ def run_migration(verbose: bool = False):
         created_at TEXT
     )
     """)
+    _ensure_column(cur, "reasoning_chains", "reasoning_source", "TEXT DEFAULT 'rule_engine'")
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_reasoning_chains_created
     ON reasoning_chains(created_at)
@@ -456,6 +483,53 @@ def run_migration(verbose: bool = False):
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_agent_briefings_generated
     ON agent_briefings(generated_at)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS price_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        category TEXT,
+        price REAL,
+        change_pct REAL,
+        direction TEXT,
+        captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_price_snapshots_sym_time
+    ON price_snapshots(symbol, captured_at DESC)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS contradictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thesis_key TEXT,
+        article_headline_a TEXT,
+        article_headline_b TEXT,
+        explanation TEXT,
+        severity TEXT,
+        created_at TEXT,
+        resolved INTEGER DEFAULT 0,
+        resolution_note TEXT DEFAULT '',
+        resolved_at TEXT DEFAULT ''
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_contradictions_created
+    ON contradictions(created_at DESC)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS thesis_confidence_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thesis_key TEXT,
+        confidence REAL,
+        run_id INTEGER DEFAULT 0,
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_conf_log_thesis_time
+    ON thesis_confidence_log(thesis_key, recorded_at DESC)
     """)
 
     conn.commit()

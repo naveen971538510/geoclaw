@@ -978,3 +978,30 @@ python3 startup.py
     - `/api/alerts` ✓
     - `/api/alerts/unread/count` ✓
     - `/api/alerts/1/dismiss` ✓
+
+## Night 4 — Phase 5 Velocity + Source Scoring
+
+- Added `thesis_confidence_log` to `/Users/naveenkumar/GeoClaw/migration.py` and ran the migration successfully.
+- Confirmed `services/feed_manager.py` already contained the Night 4 source credibility map and `get_source_weight(...)` from the interrupted earlier work, so no duplicate edit was needed there.
+- Updated `/Users/naveenkumar/GeoClaw/services/reasoning_pipeline.py`
+  - added `_recency_weight(...)`
+  - wired in `LLMAnalyst` as an optional first-pass analyst with graceful fallback to the rule engine
+  - applied source credibility and recency weighting to confidence deltas
+  - stored `reasoning_source` (`llm` or `rule_engine`)
+  - updated theses with `terminal_risk`, `watchlist_suggestion`, `timeframe`, and EMA-style `confidence_velocity`
+  - inserted rows into `thesis_confidence_log`
+- Updated `/Users/naveenkumar/GeoClaw/services/terminal_service.py`
+  - `/terminal/theses` payload now includes `terminal_risk`, `watchlist_suggestion`, `timeframe`, and `confidence_velocity`
+- Updated `/Users/naveenkumar/GeoClaw/main.py`
+  - `/terminal/theses` now returns both `items` and `theses` for compatibility
+  - added `GET /api/theses/{thesis_key}/history`
+- Verification:
+  - `python3 -m py_compile migration.py` ✓
+  - `python3 migration.py` ✓
+  - `python3 -m py_compile services/reasoning_pipeline.py` ✓
+  - `python3 -m py_compile services/terminal_service.py` ✓
+  - `python3 -m py_compile main.py` ✓
+  - live route checks:
+    - `/terminal/theses` ✓
+    - `/api/theses/{thesis_key}/history` ✓
+  - note: history is currently empty because the live DB has `0` unreasoned articles at the moment, so no new confidence-log rows have been created yet in this phase.

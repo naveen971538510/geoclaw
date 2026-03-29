@@ -569,7 +569,8 @@ def terminal_theses():
     try:
         from services.terminal_service import get_terminal_theses
 
-        return JSONResponse({"status": "ok", "items": get_terminal_theses(limit=80)})
+        theses = get_terminal_theses(limit=80)
+        return JSONResponse({"status": "ok", "items": theses, "theses": theses})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/terminal/theses", "error": str(exc)}, status_code=500)
 
@@ -1062,6 +1063,32 @@ def api_articles(limit: int = 20, offset: int = 0, days: int = 2):
         return JSONResponse({"status": "ok", **payload})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/articles", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/theses/{thesis_key:path}/history", response_class=JSONResponse)
+def api_thesis_history(thesis_key: str):
+    try:
+        from services.db_helpers import get_conn
+        from config import DB_PATH
+        from services.thesis_service import normalize_thesis_key
+
+        conn = get_conn(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT confidence, recorded_at
+            FROM thesis_confidence_log
+            WHERE thesis_key = ?
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT 20
+            """,
+            (normalize_thesis_key(thesis_key),),
+        )
+        history = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        return JSONResponse({"status": "ok", "history": history})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/theses/history", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/clusters", response_class=JSONResponse)

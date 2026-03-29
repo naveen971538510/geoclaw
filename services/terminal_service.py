@@ -229,7 +229,11 @@ def _fetch_theses(limit: int = 40) -> List[Dict]:
             evidence_count,
             contradiction_count,
             last_updated_at,
-            last_update_reason
+            last_update_reason,
+            terminal_risk,
+            watchlist_suggestion,
+            timeframe,
+            confidence_velocity
         FROM agent_theses
         ORDER BY last_updated_at DESC, id DESC
         LIMIT ?
@@ -254,6 +258,10 @@ def _fetch_theses(limit: int = 40) -> List[Dict]:
             "contradiction_count": int(row["contradiction_count"] or 0),
             "last_updated_at": row["last_updated_at"] or "",
             "last_update_reason": row["last_update_reason"] or "",
+            "terminal_risk": row["terminal_risk"] or "",
+            "watchlist_suggestion": row["watchlist_suggestion"] or "",
+            "timeframe": row["timeframe"] or "",
+            "confidence_velocity": float(row["confidence_velocity"] or 0.0),
         }
         for row in rows
     ]

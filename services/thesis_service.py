@@ -55,6 +55,38 @@ def _recency_weight(published_at: str) -> float:
     return 0.50
 
 
+def compute_recency_weight(published_at_str: str) -> float:
+    return _recency_weight(published_at_str)
+
+
+def compute_source_diversity_bonus(thesis_key: str, db_path: str = None) -> float:
+    try:
+        conn = get_conn(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT ia.source_name) AS source_count
+            FROM reasoning_chains rc
+            JOIN ingested_articles ia ON rc.article_id = ia.id
+            WHERE LOWER(COALESCE(rc.thesis_key, '')) = ?
+              AND rc.created_at >= datetime('now', '-48 hours')
+            """,
+            (normalize_thesis_key(thesis_key),),
+        )
+        row = cur.fetchone()
+        conn.close()
+        source_count = int((row["source_count"] if row else 0) or 0)
+        if source_count >= 4:
+            return 0.05
+        if source_count >= 3:
+            return 0.03
+        if source_count >= 2:
+            return 0.01
+        return 0.0
+    except Exception:
+        return 0.0
+
+
 def _thesis_row(cur, key: str):
     cur.execute(
         """
@@ -77,7 +109,11 @@ def _thesis_row(cur, key: str):
             last_decision_id,
             contradiction_count,
             notes,
-            last_update_reason
+            last_update_reason,
+            terminal_risk,
+            watchlist_suggestion,
+            timeframe,
+            confidence_velocity
         FROM agent_theses
         WHERE thesis_key = ?
         LIMIT 1
@@ -403,6 +439,10 @@ def list_theses(limit: int = 100, statuses: List[str] = None) -> List[Dict]:
             category,
             confidence,
             status,
+            terminal_risk,
+            watchlist_suggestion,
+            timeframe,
+            confidence_velocity,
             last_updated_at,
             evidence_count,
             created_at,
@@ -502,6 +542,10 @@ def get_thesis_detail(thesis_key: str) -> Dict:
         "category": thesis.get("category", "other") or "other",
         "confidence": float(thesis.get("confidence", 0.5) or 0.5),
         "status": thesis.get("status", "active"),
+        "terminal_risk": thesis.get("terminal_risk", "") or "",
+        "watchlist_suggestion": thesis.get("watchlist_suggestion", "") or "",
+        "timeframe": thesis.get("timeframe", "") or "",
+        "confidence_velocity": float(thesis.get("confidence_velocity", 0.0) or 0.0),
         "evidence_count": int(thesis.get("evidence_count", 0) or 0),
         "contradiction_count": int(thesis.get("contradiction_count", 0) or 0),
         "last_updated_at": thesis.get("last_updated_at", ""),
@@ -580,6 +624,9 @@ def update_thesis_confidence(thesis_key: str, new_evidence_source, new_evidence_
     evidence_confidence = max(0.0, min(1.0, float(new_evidence_confidence or 0.5)))
     adjusted = evidence_confidence * source_weight * recency_weight * duplicate_penalty
     new_confidence = min(0.95, (existing_confidence * 0.6) + (adjusted * 0.4))
+    current_delta = new_confidence - existing_confidence
+    old_velocity = float(thesis.get("confidence_velocity", 0.0) or 0.0)
+    new_velocity = (0.3 * current_delta) + (0.7 * old_velocity)
 
     penalty_text = "duplicate penalty 0.40" if duplicate_penalty < 1.0 else "duplicate penalty none"
     reason = (
@@ -589,10 +636,10 @@ def update_thesis_confidence(thesis_key: str, new_evidence_source, new_evidence_
     cur.execute(
         """
         UPDATE agent_theses
-        SET confidence = ?, last_updated_at = ?, last_update_reason = ?
+        SET confidence = ?, confidence_velocity = ?, last_updated_at = ?, last_update_reason = ?
         WHERE thesis_key = ?
         """,
-        (new_confidence, utc_now_iso(), reason, key),
+        (new_confidence, new_velocity, utc_now_iso(), reason, key),
     )
     conn.commit()
     conn.close()

@@ -5,6 +5,32 @@ from intelligence import normalize_article
 from services.ingest_service import DEFAULT_QUERY
 from sources import GDELTSource, GuardianSource, NewsAPISource, RSSSource
 
+SOURCE_CREDIBILITY = {
+    "Reuters": 1.0,
+    "Bloomberg": 1.0,
+    "FT": 0.9,
+    "WSJ": 0.9,
+    "ECB": 1.0,
+    "Fed Reserve": 1.0,
+    "IMF": 0.95,
+    "BBC": 0.85,
+    "CNBC": 0.80,
+    "MarketWatch": 0.75,
+    "Al Jazeera": 0.80,
+    "Foreign Policy": 0.85,
+    "Oil Price": 0.70,
+    "Economist": 0.90,
+    "Seeking Alpha": 0.50,
+}
+
+
+def get_source_weight(source_name: str) -> float:
+    clean = str(source_name or "").strip().lower()
+    for key, weight in SOURCE_CREDIBILITY.items():
+        if key.lower() in clean:
+            return float(weight)
+    return 0.65
+
 
 class FeedManager:
     def __init__(self, enabled_sources: List[str] = None):
