@@ -1516,3 +1516,34 @@ Highlights:
 - deterministic macro calendar service for recurring US, Europe, UK, China, and commodity events
 - briefing output now includes a macro calendar section for the next seven days
 - dashboard now surfaces upcoming high-impact macro events in a dedicated widget
+
+## Night 5 — Phase 7
+
+Status: Daily sentiment index complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/sentiment_index.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/migration.py`
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+
+Routes added:
+- `GET /api/sentiment/current`
+- `GET /api/sentiment/history`
+
+Verification:
+- `python3 migration.py` ✓
+- `python3 -m py_compile services/sentiment_index.py migration.py services/agent_loop_service.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/sentiment/current` ✓
+- `curl -s 'http://127.0.0.1:8000/api/sentiment/history?days=7'` ✓
+- dashboard Fear & Greed widget rendered in `/dashboard` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- composite Fear & Greed index built from article tone, thesis confidence, high-risk clustering, and contradictions
+- score now persists to `sentiment_index_log` on agent runs and is exposed via current plus history APIs
+- dashboard now includes a gauge, 7-day sparkline, and sentiment driver breakdown

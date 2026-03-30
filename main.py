@@ -1829,6 +1829,28 @@ def api_calendar_high_impact():
         return JSONResponse({"status": "error", "route": "/api/calendar/high-impact", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/sentiment/current", response_class=JSONResponse)
+def api_sentiment_current():
+    try:
+        from services.sentiment_index import SentimentIndex
+
+        index = SentimentIndex().compute(str(DB_PATH))
+        return JSONResponse({"status": "ok", "index": index})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/sentiment/current", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/sentiment/history", response_class=JSONResponse)
+def api_sentiment_history(days: int = 30):
+    try:
+        from services.sentiment_index import SentimentIndex
+
+        history = SentimentIndex().get_history(str(DB_PATH), int(days or 30))
+        return JSONResponse({"status": "ok", "history": history})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/sentiment/history", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

@@ -583,6 +583,19 @@ def run_migration(verbose: bool = False):
         ('ECB', 0.95),
         ('IMF', 0.92)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS sentiment_index_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        score REAL,
+        label TEXT,
+        components TEXT,
+        recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_sentiment_log_date
+    ON sentiment_index_log(recorded_at DESC)
+    """)
 
     conn.commit()
 
@@ -607,6 +620,7 @@ def run_migration(verbose: bool = False):
             "agent_briefings",
             "llm_cache",
             "llm_usage_log",
+            "sentiment_index_log",
         ]:
             cur.execute("SELECT COUNT(*) FROM " + table)
             count = cur.fetchone()[0]

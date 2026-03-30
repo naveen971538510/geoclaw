@@ -56,6 +56,7 @@
     .mini-box{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:10px}
     .mini-box .k{color:var(--muted);font-size:11px;text-transform:uppercase}
     .mini-box .v{font-size:18px;font-weight:700;margin-top:4px}
+    .sparkline{width:100%;height:54px}
     @media (max-width: 960px){.two-col{grid-template-columns:1fr}}
   </style>
 </head>
@@ -100,6 +101,17 @@
       <div class="panel">
         <h2>Current Market Regime</h2>
         <div id="gc-regime"><div class="skeleton"></div></div>
+      </div>
+    </section>
+
+    <section class="grid two-col" style="margin-bottom:18px">
+      <div class="panel">
+        <h2>Fear &amp; Greed Index</h2>
+        <div id="gc-sentiment-gauge"><div class="skeleton" style="height:220px"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Sentiment Drivers</h2>
+        <div id="gc-sentiment-breakdown"><div class="skeleton"></div><div class="skeleton" style="margin-top:8px"></div></div>
       </div>
     </section>
 
@@ -278,6 +290,68 @@
         </div>`;
       }).join('');
     }
+    function renderSentiment(index, history){
+      const gauge = document.getElementById('gc-sentiment-gauge');
+      const breakdown = document.getElementById('gc-sentiment-breakdown');
+      if (!gauge || !breakdown) return;
+      const safeIndex = index || {};
+      const score = Math.max(0, Math.min(100, Number(safeIndex.score || 0)));
+      const angle = (score / 100) * 180 - 90;
+      const rad = angle * Math.PI / 180;
+      const cx = 180;
+      const cy = 150;
+      const r = 110;
+      const needleX = cx + r * Math.cos(rad);
+      const needleY = cy + r * Math.sin(rad);
+      const spark = (history || []).slice(-7);
+      const sparkPoints = spark.map((item, idx) => {
+        const x = spark.length <= 1 ? 10 : (idx / (spark.length - 1)) * 220 + 10;
+        const y = 44 - (Math.max(0, Math.min(100, Number(item.score || 0))) / 100) * 36;
+        return `${x},${y}`;
+      }).join(' ');
+      gauge.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:12px;align-items:center">
+          <svg viewBox="0 0 360 210" style="width:100%;max-width:360px;height:auto">
+            <defs>
+              <linearGradient id="gcGaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#f85149"></stop>
+                <stop offset="50%" stop-color="#d29922"></stop>
+                <stop offset="100%" stop-color="#3fb950"></stop>
+              </linearGradient>
+            </defs>
+            <path d="M 70 150 A 110 110 0 0 1 290 150" fill="none" stroke="#213042" stroke-width="20" stroke-linecap="round"></path>
+            <path d="M 70 150 A 110 110 0 0 1 290 150" fill="none" stroke="url(#gcGaugeGradient)" stroke-width="16" stroke-linecap="round"></path>
+            <line x1="${cx}" y1="${cy}" x2="${needleX.toFixed(2)}" y2="${needleY.toFixed(2)}" stroke="${esc(safeIndex.color || '#58a6ff')}" stroke-width="5" stroke-linecap="round"></line>
+            <circle cx="${cx}" cy="${cy}" r="8" fill="${esc(safeIndex.color || '#58a6ff')}"></circle>
+            <text x="${cx}" y="118" text-anchor="middle" font-size="36" font-weight="800" fill="#f4f7fb">${Math.round(score)}</text>
+            <text x="${cx}" y="140" text-anchor="middle" font-size="14" fill="${esc(safeIndex.color || '#90a0b7')}">${esc(safeIndex.label || 'Neutral')}</text>
+            <text x="68" y="178" text-anchor="middle" font-size="11" fill="#90a0b7">0</text>
+            <text x="180" y="190" text-anchor="middle" font-size="11" fill="#90a0b7">50</text>
+            <text x="292" y="178" text-anchor="middle" font-size="11" fill="#90a0b7">100</text>
+          </svg>
+          <div class="muted" style="text-align:center">Composite daily index from article tone, thesis conviction, high-risk clustering, and contradictions.</div>
+          <svg class="sparkline" viewBox="0 0 240 54" preserveAspectRatio="none">
+            <path d="M10 44 L230 44" stroke="#263244" stroke-width="1"></path>
+            ${sparkPoints ? `<polyline fill="none" stroke="${esc(safeIndex.color || '#58a6ff')}" stroke-width="3" points="${sparkPoints}"></polyline>` : ''}
+          </svg>
+        </div>
+      `;
+      const components = safeIndex.components || {};
+      const inputs = safeIndex.inputs || {};
+      const rows = [
+        ['Article Sentiment', components.article_sentiment, `${inputs.positive_articles || 0} pos / ${inputs.negative_articles || 0} neg / ${inputs.neutral_articles || 0} neutral`],
+        ['Thesis Confidence', components.thesis_confidence, `Avg thesis confidence ${(Number(inputs.avg_thesis_conf || 0) * 100).toFixed(0)}%`],
+        ['High Risk Theses', components.high_risk_theses, `${inputs.high_risk_count || 0} active HIGH-risk theses`],
+        ['Contradictions', components.contradictions, `${inputs.contradiction_count || 0} active contradictions`],
+      ];
+      breakdown.innerHTML = rows.map(([label, value, meta]) => `
+        <div style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;gap:12px"><strong>${esc(label)}</strong><span>${Math.round(Number(value || 0))}</span></div>
+          <div class="bar-shell" style="margin-top:6px"><div class="bar-fill ${Number(value || 0) >= 65 ? 'green' : (Number(value || 0) >= 40 ? 'yellow' : 'red')}" style="width:${Math.max(0, Math.min(100, Number(value || 0)))}%"></div></div>
+          <div class="muted" style="margin-top:4px">${esc(meta)}</div>
+        </div>
+      `).join('');
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -315,7 +389,7 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
@@ -324,7 +398,9 @@
           fetchJson('/api/intelligence/narratives'),
           fetchJson('/api/intelligence/regime'),
           fetchJson('/api/intelligence/calibration'),
-          fetchJson('/api/calendar?days=7')
+          fetchJson('/api/calendar?days=7'),
+          fetchJson('/api/sentiment/current'),
+          fetchJson('/api/sentiment/history?days=7')
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
@@ -353,6 +429,7 @@
         renderNarratives(narrativesData.narratives || []);
         renderRegime(regimeData.regime || {});
         renderCalendar(calendarData.events || []);
+        renderSentiment(sentimentData.index || {}, sentimentHistoryData.history || []);
         gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';

@@ -416,6 +416,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     decay_stats = {"decayed": 0, "superseded": 0}
     promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
     dedup_result = {"pairs_found": 0, "merged": 0, "superseded": [], "dry_run": False}
+    sentiment_snapshot = {"score": 0.0, "label": "Neutral", "components": {}, "inputs": {}}
     cooldown_blocked_actions = 0
     goal_cap_blocks = 0
     research_cap_blocks = 0
@@ -763,6 +764,14 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     except Exception as exc:
         logger.warning("Dedup failed: %s", exc)
         step_results["deduplication"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.sentiment_index import SentimentIndex
+
+        sentiment_snapshot = SentimentIndex().save_daily_score(DB_PATH)
+        step_results["sentiment_index"] = {"status": "ok", "score": float(sentiment_snapshot.get("score", 0.0) or 0.0)}
+    except Exception as exc:
+        logger.warning("Sentiment index failed: %s", exc)
+        step_results["sentiment_index"] = {"status": "error", "error": str(exc)}
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -793,6 +802,9 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "deduplication": dedup_result,
         "reflection_summary": reflection_metrics,
         "briefing_created": briefing_created,
+        "sentiment_index": float(sentiment_snapshot.get("score", 0.0) or 0.0),
+        "sentiment_label": str(sentiment_snapshot.get("label", "") or ""),
+        "sentiment_components": sentiment_snapshot.get("components", {}) or {},
         "cooldown_blocked_actions": cooldown_blocked_actions,
         "goal_cap_blocks": goal_cap_blocks,
         "research_cap_blocks": research_cap_blocks,
