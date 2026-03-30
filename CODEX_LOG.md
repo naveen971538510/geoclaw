@@ -1396,3 +1396,37 @@ Highlights:
 - SSE stream for browsers without needing WebSockets
 - live feed page with filtering, stats, and expandable JSON rows
 - terminal event counter and auto-refresh on important run events
+
+## Night 5 — Phase 3
+
+Status: Price confirmation loop complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/prediction_tracker.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/migration.py`
+- `/Users/naveenkumar/GeoClaw/services/reasoning_pipeline.py`
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+
+Routes added:
+- `GET /api/predictions`
+- `GET /api/predictions/accuracy`
+
+Verification:
+- `python3 migration.py` ✓
+- `python3 -m py_compile migration.py` ✓
+- `python3 -m py_compile services/prediction_tracker.py` ✓
+- `python3 -m py_compile services/reasoning_pipeline.py services/agent_loop_service.py services/prediction_tracker.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/predictions` ✓
+- `curl -s http://127.0.0.1:8000/api/predictions/accuracy` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- thesis prediction table for news-to-price outcome tracking
+- automatic prediction recording on sufficiently strong thesis updates
+- prediction checking step in the real agent loop
+- thesis drilldown now shows prediction rows and per-thesis accuracy when data exists

@@ -157,13 +157,22 @@
       try {
         const drill = await fetch('/terminal/drilldown/' + encodeURIComponent(thesisKey)).then(r => r.json()).then(d => d.item || {});
         let prices = [];
+        let predictions = [];
         try {
           const p = await fetch('/api/prices/' + encodeURIComponent(thesisKey)).then(r => r.json());
           prices = p.prices || [];
         } catch (e) {}
+        try {
+          const pred = await fetch('/api/predictions?limit=10&thesis_key=' + encodeURIComponent(thesisKey)).then(r => r.json());
+          predictions = pred.predictions || [];
+        } catch (e) {}
+        const resolvedPredictions = predictions.filter(p => String(p.outcome || 'pending') !== 'pending');
+        const verifiedPredictions = resolvedPredictions.filter(p => String(p.outcome || '') === 'verified').length;
+        const thesisAccuracy = resolvedPredictions.length ? Math.round((verifiedPredictions / resolvedPredictions.length) * 100) : null;
         holder.innerHTML = `${!pricesOnly ? `<div><strong>Articles</strong><div class="muted">${(drill.trace?.articles || []).map(a => esc(a.headline || a.title || '')).join(' · ') || 'No linked article trace yet.'}</div></div>
           <div style="margin-top:10px"><strong>Reasoning</strong><div class="muted">${(drill.reasoning || []).map(r => ((r.chain || []).map(h => `${h.hop}. ${h.from} → ${h.to}`).join(' | '))).join('<br>') || 'No reasoning chain yet.'}</div></div>
-          <div style="margin-top:10px"><strong>Actions</strong><div class="muted">${(drill.actions || []).map(a => esc(`${a.action_type || 'action'} · ${a.status || ''}`)).join(' · ') || 'No linked actions.'}</div></div>` : ''}
+          <div style="margin-top:10px"><strong>Actions</strong><div class="muted">${(drill.actions || []).map(a => esc(`${a.action_type || 'action'} · ${a.status || ''}`)).join(' · ') || 'No linked actions.'}</div></div>
+          <div style="margin-top:10px"><strong>Predictions</strong><div class="muted">${predictions.length ? predictions.map(p => `${esc(p.symbol || 'n/a')} · ${esc(p.predicted_direction || 'n/a')} · ${esc(p.outcome || 'pending')} · ${p.actual_change_pct == null ? 'n/a' : `${Number(p.actual_change_pct).toFixed(2)}%`}`).join('<br>') : 'No tracked predictions yet.'}</div>${thesisAccuracy == null ? '' : `<div class="muted" style="margin-top:6px">Prediction accuracy for this thesis: ${thesisAccuracy}%</div>`}</div>` : ''}
           <div style="margin-top:10px"><strong>📈 Related prices</strong><div class="prices">${prices.length ? prices.map(p => `<div class="price"><div><strong>${esc(p.symbol)}</strong></div><div>${p.price == null ? '—' : Number(p.price).toLocaleString(undefined,{maximumFractionDigits:2})}</div><div class="muted">${Number(p.change_pct || 0) >= 0 ? '+' : ''}${Number(p.change_pct || 0).toFixed(2)}%</div></div>`).join('') : '<div class="muted">Price feed unavailable.</div>'}</div></div>`;
       } catch (e) {
         holder.innerHTML = '<div class="muted">Could not load drilldown.</div>';

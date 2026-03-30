@@ -531,6 +531,33 @@ def run_migration(verbose: bool = False):
     CREATE INDEX IF NOT EXISTS idx_conf_log_thesis_time
     ON thesis_confidence_log(thesis_key, recorded_at DESC)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS thesis_predictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        thesis_key TEXT,
+        predicted_direction TEXT,
+        predicted_asset TEXT,
+        symbol TEXT,
+        price_at_prediction REAL,
+        confidence_at_prediction REAL,
+        predicted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        run_id INTEGER,
+        check_after_hours INTEGER DEFAULT 24,
+        checked_at TIMESTAMP,
+        price_at_check REAL,
+        actual_change_pct REAL,
+        outcome TEXT DEFAULT 'pending',
+        outcome_note TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_predictions_thesis
+    ON thesis_predictions(thesis_key, outcome)
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_predictions_pending
+    ON thesis_predictions(outcome, predicted_at)
+    """)
 
     conn.commit()
 

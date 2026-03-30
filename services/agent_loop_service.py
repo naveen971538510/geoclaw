@@ -382,6 +382,17 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         logger.warning("Price snapshot failed: %s", exc)
         prices_captured = 0
         step_results["prices"] = {"status": "error", "error": str(exc)}
+    prediction_checks = {"checked": 0, "verified": 0, "refuted": 0, "neutral": 0}
+    try:
+        from services.prediction_tracker import PredictionTracker
+
+        prediction_checks = PredictionTracker(DB_PATH).check_pending_predictions()
+        if int(prediction_checks.get("verified", 0) or 0) > 0 or int(prediction_checks.get("refuted", 0) or 0) > 0:
+            publish("prediction_checked", prediction_checks)
+        step_results["prediction_checks"] = {"status": "ok"}
+    except Exception as exc:
+        logger.warning("Prediction check failed: %s", exc)
+        step_results["prediction_checks"] = {"status": "error", "error": str(exc)}
     payload = {"cards": [], "stats": {}}
     goals = []
     watch_targets = []
@@ -764,6 +775,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "autonomous_goals_created": autonomous_goals_created,
         "alerts_fired": alerts_fired,
         "prices_captured": prices_captured,
+        "prediction_checks": prediction_checks,
         "reasoning_chains_built": int(ingestion.get("reasoning_chains_built", 0) or 0) + int(reasoning_pipeline_stats.get("chains_written", 0) or 0),
         "reasoning_pipeline": reasoning_pipeline_stats,
         "reasoning_cap_blocks": reasoning_cap_blocks,

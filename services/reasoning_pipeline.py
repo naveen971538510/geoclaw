@@ -8,6 +8,7 @@ from services.event_bus import publish
 from services.feed_manager import get_source_weight
 from services.llm_analyst import LLMAnalyst
 from services.logging_service import get_logger
+from services.prediction_tracker import PredictionTracker
 from services.rule_engine import RuleEngine
 from services.thesis_service import normalize_thesis_key
 
@@ -307,6 +308,12 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
                 "delta": round(float((emitted_confidence or current_confidence or 0.0) - float(old_conf or 0.0)), 3),
             },
         )
+        try:
+            pred_id = PredictionTracker(db_path or DB_PATH).record_prediction(thesis_key, float(emitted_confidence or current_confidence or 0.0), run_id=0)
+            if pred_id:
+                stats["predictions_recorded"] = int(stats.get("predictions_recorded", 0) or 0) + 1
+        except Exception as exc:
+            logger.warning("Prediction recording failed: %s", exc)
         stats["chains_written"] += 1
 
         cur.execute(

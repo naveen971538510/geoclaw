@@ -1513,6 +1513,46 @@ def api_events_types():
         return JSONResponse({"status": "error", "route": "/api/events/types", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/predictions", response_class=JSONResponse)
+def api_predictions(outcome: str = "all", thesis_key: str = "", limit: int = 20):
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        params = []
+        where = []
+        clean_outcome = str(outcome or "all").strip().lower()
+        clean_key = str(thesis_key or "").strip()
+        if clean_outcome and clean_outcome != "all":
+            where.append("LOWER(COALESCE(outcome, 'pending')) = ?")
+            params.append(clean_outcome)
+        if clean_key:
+            where.append("LOWER(COALESCE(thesis_key, '')) = ?")
+            params.append(clean_key.lower())
+        sql = "SELECT * FROM thesis_predictions"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY predicted_at DESC, id DESC LIMIT ?"
+        params.append(int(limit or 20))
+        rows = [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
+        conn.close()
+        return JSONResponse({"status": "ok", "predictions": rows, "count": len(rows)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/predictions", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/predictions/accuracy", response_class=JSONResponse)
+def api_predictions_accuracy():
+    try:
+        from services.prediction_tracker import PredictionTracker
+
+        report = PredictionTracker(str(DB_PATH)).get_accuracy_report()
+        return JSONResponse({"status": "ok", "report": report})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/predictions/accuracy", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/agent/status", response_class=JSONResponse)
 def api_agent_status():
     try:
