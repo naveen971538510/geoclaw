@@ -1430,3 +1430,31 @@ Highlights:
 - automatic prediction recording on sufficiently strong thesis updates
 - prediction checking step in the real agent loop
 - thesis drilldown now shows prediction rows and per-thesis accuracy when data exists
+
+## Night 5 — Phase 4
+
+Status: Thesis deduplication complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/thesis_deduplicator.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+
+Routes added:
+- `GET /api/intelligence/duplicates`
+- `POST /api/intelligence/merge-duplicates`
+
+Verification:
+- `python3 -m py_compile services/thesis_deduplicator.py` ✓
+- `python3 -m py_compile services/agent_loop_service.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/intelligence/duplicates` ✓
+- dry-run duplicate pair observed in live DB ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- TF-IDF and cosine similarity based duplicate thesis detection
+- automatic post-lifecycle deduplication pass in the real agent loop
+- inspection route for duplicate pairs before any manual merge action

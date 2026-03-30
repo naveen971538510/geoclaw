@@ -1750,6 +1750,29 @@ def api_intelligence_calibration():
         return JSONResponse({"status": "error", "route": "/api/intelligence/calibration", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/intelligence/duplicates", response_class=JSONResponse)
+def api_intelligence_duplicates():
+    try:
+        from services.thesis_deduplicator import ThesisDeduplicator
+
+        pairs = ThesisDeduplicator().find_duplicates(str(DB_PATH))
+        return JSONResponse({"status": "ok", "pairs": pairs, "count": len(pairs)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/duplicates", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/intelligence/merge-duplicates", response_class=JSONResponse)
+def api_intelligence_merge_duplicates(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.thesis_deduplicator import ThesisDeduplicator
+
+        result = ThesisDeduplicator().merge_duplicates(str(DB_PATH), dry_run=False)
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/intelligence/merge-duplicates", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

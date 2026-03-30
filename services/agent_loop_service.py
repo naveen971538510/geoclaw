@@ -415,6 +415,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     alerts_fired = 0
     decay_stats = {"decayed": 0, "superseded": 0}
     promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
+    dedup_result = {"pairs_found": 0, "merged": 0, "superseded": [], "dry_run": False}
     cooldown_blocked_actions = 0
     goal_cap_blocks = 0
     research_cap_blocks = 0
@@ -753,6 +754,15 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         decay_stats = {"decayed": 0, "superseded": 0}
         promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
         step_results["thesis_lifecycle"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.thesis_deduplicator import ThesisDeduplicator
+
+        dedup_result = ThesisDeduplicator().merge_duplicates(DB_PATH)
+        logger.info("Deduplication merged %s thesis pairs", int(dedup_result.get("merged", 0) or 0))
+        step_results["deduplication"] = {"status": "ok", "merged": int(dedup_result.get("merged", 0) or 0)}
+    except Exception as exc:
+        logger.warning("Dedup failed: %s", exc)
+        step_results["deduplication"] = {"status": "error", "error": str(exc)}
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -780,6 +790,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "reasoning_pipeline": reasoning_pipeline_stats,
         "reasoning_cap_blocks": reasoning_cap_blocks,
         "thesis_lifecycle": {**decay_stats, **promote_demote_stats},
+        "deduplication": dedup_result,
         "reflection_summary": reflection_metrics,
         "briefing_created": briefing_created,
         "cooldown_blocked_actions": cooldown_blocked_actions,
