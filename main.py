@@ -1773,6 +1773,29 @@ def api_intelligence_merge_duplicates(request: Request):
         return JSONResponse({"status": "error", "route": "/api/intelligence/merge-duplicates", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/sources/reliability", response_class=JSONResponse)
+def api_sources_reliability():
+    try:
+        from services.source_learner import SourceLearner
+
+        sources = SourceLearner(str(DB_PATH)).get_leaderboard()
+        return JSONResponse({"status": "ok", "sources": sources})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/sources/reliability", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/sources/learn", response_class=JSONResponse)
+def api_sources_learn(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.source_learner import SourceLearner
+
+        result = SourceLearner(str(DB_PATH)).update_from_predictions()
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/sources/learn", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

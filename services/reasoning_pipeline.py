@@ -164,7 +164,12 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
             stats["rule_engine_used"] += 1
 
         now = _utc_now_iso()
-        source_weight = get_source_weight(item.get("source_name", ""))
+        try:
+            from services.source_learner import SourceLearner
+
+            source_weight = SourceLearner(db_path or DB_PATH).get_weight(item.get("source_name", ""))
+        except Exception:
+            source_weight = get_source_weight(item.get("source_name", ""))
         recency_weight = _recency_weight(item.get("published_at") or item.get("fetched_at") or "")
         if existing_row:
             old_conf = float(existing_row.get("confidence", 0.5) or 0.5)

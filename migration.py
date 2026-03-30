@@ -558,6 +558,31 @@ def run_migration(verbose: bool = False):
     CREATE INDEX IF NOT EXISTS idx_predictions_pending
     ON thesis_predictions(outcome, predicted_at)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS source_reliability (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_name TEXT UNIQUE,
+        total_predictions INTEGER DEFAULT 0,
+        verified_predictions INTEGER DEFAULT 0,
+        refuted_predictions INTEGER DEFAULT 0,
+        reliability_score REAL DEFAULT 0.65,
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    INSERT OR IGNORE INTO source_reliability (source_name, reliability_score) VALUES
+        ('Reuters', 0.90),
+        ('Bloomberg', 0.90),
+        ('FT', 0.85),
+        ('BBC', 0.80),
+        ('CNBC', 0.75),
+        ('Al Jazeera', 0.78),
+        ('MarketWatch', 0.72),
+        ('Oil Price', 0.68),
+        ('Fed Reserve', 0.95),
+        ('ECB', 0.95),
+        ('IMF', 0.92)
+    """)
 
     conn.commit()
 

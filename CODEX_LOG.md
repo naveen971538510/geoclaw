@@ -1458,3 +1458,32 @@ Highlights:
 - TF-IDF and cosine similarity based duplicate thesis detection
 - automatic post-lifecycle deduplication pass in the real agent loop
 - inspection route for duplicate pairs before any manual merge action
+
+## Night 5 — Phase 5
+
+Status: Source reliability learning complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/source_learner.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/migration.py`
+- `/Users/naveenkumar/GeoClaw/services/reasoning_pipeline.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+
+Routes added:
+- `GET /api/sources/reliability`
+- `POST /api/sources/learn`
+
+Verification:
+- `python3 migration.py` ✓
+- `python3 -m py_compile migration.py services/source_learner.py services/reasoning_pipeline.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/sources/reliability` ✓
+- seeded reliability leaderboard returned from live DB ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- learnable source reliability table with seeded baseline credibility
+- EMA-style score updates from verified vs refuted price predictions
+- reasoning pipeline now prefers learned source weights and falls back safely to the static map
