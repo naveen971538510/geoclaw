@@ -1,0 +1,336 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask GeoClaw</title>
+  <style>
+    :root{
+      --bg:#0b1016;
+      --panel:#101722;
+      --panel2:#161f2d;
+      --line:#263244;
+      --text:#f4f7fb;
+      --muted:#90a0b7;
+      --blue:#4da3ff;
+      --green:#2fb171;
+      --yellow:#d39a33;
+      --red:#d95c5c;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(circle at top,#132033 0%,#0b1016 42%,#081019 100%);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:rgba(13,19,28,.94);backdrop-filter:blur(10px);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none}
+    nav strong{color:#fff}
+    .page{padding:24px 20px 40px;max-width:1480px;margin:0 auto}
+    .hero{background:linear-gradient(135deg,rgba(77,163,255,.14),rgba(47,177,113,.08));border:1px solid rgba(77,163,255,.28);border-radius:22px;padding:28px 28px 24px;box-shadow:0 20px 60px rgba(0,0,0,.24)}
+    .eyebrow{color:#8ab4ff;font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+    h1{margin:8px 0 6px;font-size:40px;line-height:1.1}
+    .sub{color:var(--muted);max-width:720px;font-size:16px}
+    .search-shell{margin-top:22px;display:grid;grid-template-columns:1fr auto;gap:12px}
+    .search-shell input{width:100%;padding:18px 18px;border-radius:16px;border:1px solid #35557d;background:rgba(11,16,22,.8);color:var(--text);font-size:18px;outline:none}
+    .search-shell button{padding:0 24px;border-radius:16px;border:1px solid #2f8a5c;background:linear-gradient(180deg,#2fb171,#278d5a);color:#fff;font-weight:800;cursor:pointer;font-size:15px}
+    .chips{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .chip{border:1px solid var(--line);background:rgba(16,23,34,.88);color:#c8d3e1;padding:8px 12px;border-radius:999px;cursor:pointer}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;margin-top:18px}
+    .panel{background:rgba(16,23,34,.92);border:1px solid var(--line);border-radius:18px;padding:18px}
+    .answer-copy{font-size:16px;line-height:1.75}
+    .muted{color:var(--muted)}
+    .loading{display:inline-flex;align-items:center;gap:10px;color:#a8d0ff}
+    .loading::after{content:"";width:10px;height:10px;border-radius:999px;background:#4da3ff;box-shadow:18px 0 0 rgba(77,163,255,.45),36px 0 0 rgba(77,163,255,.2);animation:pulse 1.1s infinite linear}
+    @keyframes pulse{0%{transform:translateX(0)}50%{transform:translateX(6px)}100%{transform:translateX(0)}}
+    .confidence-shell{margin-top:14px;height:8px;background:#1b2430;border-radius:999px;overflow:hidden}
+    .confidence-fill{height:100%;background:linear-gradient(90deg,#d95c5c 0%,#d39a33 50%,#2fb171 100%)}
+    .confidence-meta{margin-top:8px;color:var(--muted);font-size:12px}
+    .data-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:16px}
+    .mini-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px}
+    .mini-card h3{margin:0 0 8px;font-size:13px}
+    .mini-thesis{border-left:3px solid #4da3ff;padding-left:10px;margin:10px 0}
+    .mini-article{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .mini-article:last-child{border-bottom:none}
+    .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent}
+    .badge.green{background:rgba(47,177,113,.14);border-color:rgba(47,177,113,.34);color:#9aebbf}
+    .badge.yellow{background:rgba(211,154,51,.14);border-color:rgba(211,154,51,.34);color:#ffd488}
+    .badge.red{background:rgba(217,92,92,.14);border-color:rgba(217,92,92,.34);color:#ffb0b0}
+    .history-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+    .history-item{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer}
+    .history-item:last-child{border-bottom:none}
+    .history-item:hover{color:#fff}
+    .empty{color:var(--muted);border:1px dashed var(--line);border-radius:14px;padding:16px}
+    .section-title{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:18px 0 10px}
+    .followups{margin-top:14px}
+    .hidden{display:none !important}
+    .tiny{font-size:12px}
+    @media (max-width: 980px){
+      .layout{grid-template-columns:1fr}
+      .search-shell{grid-template-columns:1fr}
+      h1{font-size:32px}
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/ask">Ask</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+
+  <div class="page">
+    <section class="hero">
+      <div class="eyebrow">Natural Language Query Engine</div>
+      <h1>Ask GeoClaw</h1>
+      <div class="sub">Ask anything about current geopolitical and market conditions. GeoClaw will search its thesis, article, contradiction, and action layers and answer in plain English.</div>
+      <div class="search-shell">
+        <input id="gc-ask-input" placeholder="What is driving oil right now?">
+        <button id="gc-ask-btn">Ask</button>
+      </div>
+      <div id="gc-suggestions" class="chips"></div>
+    </section>
+
+    <div class="layout">
+      <main>
+        <section id="gc-answer-panel" class="panel hidden">
+          <div id="gc-answer-state" class="loading hidden">Thinking…</div>
+          <div id="gc-answer-copy" class="answer-copy"></div>
+          <div class="confidence-shell hidden" id="gc-answer-confidence-shell">
+            <div class="confidence-fill" id="gc-answer-confidence-fill"></div>
+          </div>
+          <div id="gc-answer-confidence-meta" class="confidence-meta hidden"></div>
+          <div class="followups">
+            <div class="section-title">Follow-up questions</div>
+            <div id="gc-followups" class="chips"></div>
+          </div>
+        </section>
+
+        <section id="gc-data-panel" class="panel hidden" style="margin-top:18px">
+          <div class="section-title">Supporting Data</div>
+          <div id="gc-data-grid" class="data-grid"></div>
+        </section>
+      </main>
+
+      <aside class="panel">
+        <div class="history-head">
+          <div>
+            <div class="section-title" style="margin:0 0 2px">Recent Questions</div>
+            <div class="tiny muted">Stored in this browser only</div>
+          </div>
+          <button id="gc-clear-history" class="chip" style="padding:6px 10px">Clear</button>
+        </div>
+        <div id="gc-history" class="empty">No questions asked yet.</div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+
+    const HISTORY_KEY = 'gc_ask_history';
+    let gcSuggestions = [];
+
+    function addToHistory(q, a) {
+      const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      history.unshift({ q, a: String(a || '').slice(0, 100), t: new Date().toISOString() });
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10)));
+      renderHistory();
+    }
+
+    function renderHistory() {
+      const wrap = document.getElementById('gc-history');
+      const history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      if (!history.length) {
+        wrap.className = 'empty';
+        wrap.innerHTML = 'No questions asked yet.';
+        return;
+      }
+      wrap.className = '';
+      wrap.innerHTML = history.map(item => `
+        <div class="history-item" data-history-q="${esc(item.q)}">
+          <div><strong>${esc(item.q)}</strong></div>
+          <div class="muted tiny" style="margin-top:4px">${esc(item.a || '')}</div>
+          <div class="muted tiny" style="margin-top:6px">${esc(new Date(item.t).toLocaleString())}</div>
+        </div>
+      `).join('');
+      document.querySelectorAll('[data-history-q]').forEach(node => {
+        node.addEventListener('click', () => {
+          const question = node.getAttribute('data-history-q') || '';
+          document.getElementById('gc-ask-input').value = question;
+          gcAsk(question);
+        });
+      });
+    }
+
+    function renderSuggestions(items) {
+      const wrap = document.getElementById('gc-suggestions');
+      gcSuggestions = items || [];
+      wrap.innerHTML = gcSuggestions.map(item => `<button class="chip" data-suggestion="${esc(item)}">${esc(item)}</button>`).join('');
+      document.querySelectorAll('[data-suggestion]').forEach(node => {
+        node.addEventListener('click', () => {
+          const question = node.getAttribute('data-suggestion') || '';
+          document.getElementById('gc-ask-input').value = question;
+          gcAsk(question);
+        });
+      });
+    }
+
+    function setLoading(isLoading) {
+      document.getElementById('gc-answer-panel').classList.remove('hidden');
+      document.getElementById('gc-answer-state').classList.toggle('hidden', !isLoading);
+      if (isLoading) {
+        document.getElementById('gc-answer-copy').innerHTML = '';
+        document.getElementById('gc-data-panel').classList.add('hidden');
+        document.getElementById('gc-followups').innerHTML = '';
+        document.getElementById('gc-answer-confidence-shell').classList.add('hidden');
+        document.getElementById('gc-answer-confidence-meta').classList.add('hidden');
+      }
+    }
+
+    function colorForConfidence(confidence) {
+      if (confidence >= 0.75) return '#2fb171';
+      if (confidence >= 0.45) return '#d39a33';
+      return '#d95c5c';
+    }
+
+    function renderFollowups(items) {
+      const wrap = document.getElementById('gc-followups');
+      wrap.innerHTML = (items || []).map(item => `<button class="chip" data-followup="${esc(item)}">${esc(item)}</button>`).join('');
+      document.querySelectorAll('[data-followup]').forEach(node => {
+        node.addEventListener('click', () => {
+          const question = node.getAttribute('data-followup') || '';
+          document.getElementById('gc-ask-input').value = question;
+          gcAsk(question);
+        });
+      });
+    }
+
+    function renderDataSection(data) {
+      const grid = document.getElementById('gc-data-grid');
+      const blocks = [];
+      if (Array.isArray(data.theses) && data.theses.length) {
+        blocks.push(`
+          <div class="mini-card">
+            <h3>Active theses</h3>
+            ${data.theses.slice(0, 5).map(item => `
+              <div class="mini-thesis">
+                <div><strong>${esc(item.thesis_key || item.current_claim || '')}</strong></div>
+                <div class="tiny muted" style="margin-top:4px">${esc(Math.round(Number(item.confidence || 0) * 100))}% confidence · ${esc(item.status || 'active')}</div>
+                <div class="tiny muted" style="margin-top:4px">${esc(item.watchlist_suggestion || item.last_update_reason || '')}</div>
+              </div>
+            `).join('')}
+          </div>
+        `);
+      }
+      if (Array.isArray(data.articles) && data.articles.length) {
+        blocks.push(`
+          <div class="mini-card">
+            <h3>Recent articles</h3>
+            ${data.articles.slice(0, 6).map(item => `
+              <div class="mini-article">
+                <div><strong>${esc(item.headline || '')}</strong></div>
+                <div class="tiny muted" style="margin-top:4px">${esc(item.source_name || item.source || 'Unknown source')} · ${esc((item.published_at || item.fetched_at || '').slice(0, 16).replace('T', ' '))}</div>
+              </div>
+            `).join('')}
+          </div>
+        `);
+      }
+      if (data.regime && typeof data.regime === 'object') {
+        const regime = data.regime;
+        const color = regime.regime === 'CRISIS' ? 'red' : (regime.regime === 'RISK-OFF' ? 'yellow' : 'green');
+        blocks.push(`
+          <div class="mini-card">
+            <h3>Regime snapshot</h3>
+            <div class="badge ${color}">${esc(regime.regime || 'UNKNOWN')}</div>
+            <div style="margin-top:10px">${esc(regime.description || '')}</div>
+            <div class="tiny muted" style="margin-top:8px">Average thesis confidence: ${esc(String(Math.round(Number(regime.avg_thesis_confidence || 0) * 100)))}%</div>
+          </div>
+        `);
+      }
+      if (!blocks.length) {
+        document.getElementById('gc-data-panel').classList.add('hidden');
+        grid.innerHTML = '';
+        return;
+      }
+      grid.innerHTML = blocks.join('');
+      document.getElementById('gc-data-panel').classList.remove('hidden');
+    }
+
+    function renderAnswer(payload) {
+      const answer = payload.answer || 'No answer returned.';
+      const confidence = Math.max(0, Math.min(1, Number(payload.confidence || 0)));
+      document.getElementById('gc-answer-state').classList.add('hidden');
+      document.getElementById('gc-answer-panel').classList.remove('hidden');
+      document.getElementById('gc-answer-copy').innerHTML = esc(answer).replace(/\n/g, '<br>');
+
+      const shell = document.getElementById('gc-answer-confidence-shell');
+      const fill = document.getElementById('gc-answer-confidence-fill');
+      const meta = document.getElementById('gc-answer-confidence-meta');
+      shell.classList.remove('hidden');
+      meta.classList.remove('hidden');
+      fill.style.width = `${Math.max(6, Math.round(confidence * 100))}%`;
+      fill.style.background = colorForConfidence(confidence);
+      meta.textContent = `Answer confidence: ${Math.round(confidence * 100)}% · Sources: ${(payload.sources || []).join(', ') || 'none'}`;
+
+      renderFollowups(payload.follow_up || []);
+      renderDataSection(payload.data || {});
+    }
+
+    async function gcAsk(question) {
+      const clean = String(question || '').trim();
+      if (!clean) return;
+      setLoading(true);
+      try {
+        const data = await fetch(`/api/ask?q=${encodeURIComponent(clean)}`, { cache: 'no-store' }).then(r => r.json());
+        if (data.status === 'error') throw new Error(data.error || data.message || 'Query failed');
+        renderAnswer(data);
+        addToHistory(clean, data.answer);
+      } catch (err) {
+        renderAnswer({
+          answer: `Query failed: ${err.message}`,
+          confidence: 0,
+          follow_up: gcSuggestions.slice(0, 3),
+          data: {}
+        });
+      }
+    }
+
+    async function loadSuggestions() {
+      try {
+        const data = await fetch('/api/ask/suggestions', { cache: 'no-store' }).then(r => r.json());
+        renderSuggestions(data.suggestions || []);
+      } catch (err) {
+        renderSuggestions([
+          'What is driving oil right now?',
+          'What is the current market regime?',
+          'Show top theses'
+        ]);
+      }
+    }
+
+    document.getElementById('gc-ask-btn').addEventListener('click', () => gcAsk(document.getElementById('gc-ask-input').value));
+    document.getElementById('gc-ask-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        gcAsk(event.target.value);
+      }
+    });
+    document.getElementById('gc-clear-history').addEventListener('click', () => {
+      localStorage.removeItem(HISTORY_KEY);
+      renderHistory();
+    });
+
+    renderHistory();
+    loadSuggestions();
+  </script>
+</body>
+</html>

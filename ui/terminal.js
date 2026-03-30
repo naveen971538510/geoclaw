@@ -1658,6 +1658,32 @@ async function gcRunAgentNow(){
     }
   }
 }
+function gcShowMiniAskAnswer(text, color){
+  const box = document.getElementById('gc-mini-ask-answer');
+  if (!box) return;
+  box.style.display = 'block';
+  box.style.borderColor = color || '#263244';
+  box.style.color = color || '#c9d5e4';
+  box.innerHTML = gcEscape(text || '');
+}
+async function gcMiniAsk(){
+  const input = document.getElementById('gc-mini-ask-input');
+  if (!input) return;
+  const question = String(input.value || '').trim();
+  if (!question) return;
+  gcShowMiniAskAnswer('Thinking…', '#8ab4ff');
+  try{
+    const data = await fetchJson('/api/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question})
+    });
+    const answer = String(data.answer || 'No answer returned.');
+    gcShowMiniAskAnswer(answer, Number(data.confidence || 0) >= 0.6 ? '#9aebbf' : '#c9d5e4');
+  }catch(err){
+    gcShowMiniAskAnswer('Query failed: ' + err.message, '#ffb0b0');
+  }
+}
 
 state.watchlist = readLocal(STORAGE_KEYS.watchlist, ['oil','gold','forex']);
 state.alertReadMap = readLocal(STORAGE_KEYS.alertsRead, {});
@@ -1675,6 +1701,13 @@ document.getElementById('refreshBtn').addEventListener('click', reloadAll);
 document.getElementById('runAgentBtn').addEventListener('click', runAgentNow);
 document.getElementById('runRealAgentBtn').addEventListener('click', runRealAgentNow);
 document.getElementById('gcLiveRunBtn').addEventListener('click', gcRunAgentNow);
+document.getElementById('gc-mini-ask-btn')?.addEventListener('click', gcMiniAsk);
+document.getElementById('gc-mini-ask-input')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter'){
+    event.preventDefault();
+    gcMiniAsk();
+  }
+});
 document.getElementById('focusModeBtn').addEventListener('click', () => {
   state.focusMode = !state.focusMode;
   writeLocal(STORAGE_KEYS.focusMode, state.focusMode);

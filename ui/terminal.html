@@ -12,6 +12,7 @@
     <strong style="color:#fff">GeoClaw</strong>
     <a class="gc-nav-link" href="/dashboard" style="text-decoration:none">Dashboard</a>
     <a class="gc-nav-link" href="/terminal" style="text-decoration:none">Terminal</a>
+    <a class="gc-nav-link" href="/ask" style="text-decoration:none">Ask</a>
     <a class="gc-nav-link" href="/theses" style="text-decoration:none">Theses</a>
     <a class="gc-nav-link" href="/articles" style="text-decoration:none">Articles</a>
     <a class="gc-nav-link" href="/briefings" style="text-decoration:none">Briefings</a>
@@ -52,6 +53,7 @@
             <button class='btn small' data-overlay='alerts' data-panel='alerts'>Alerts</button>
             <button class='btn small' data-overlay='theses' data-panel='theses'>Theses</button>
             <button class='btn small' data-overlay='actions' data-panel='actions'>Actions</button>
+            <button class='btn small' onclick="window.open('/ask','_blank')">Ask</button>
             <button class='btn small' data-overlay='reasoning'>Reasoning</button>
             <button class='btn small' data-overlay='briefing' data-panel='briefing'>Briefing</button>
             <button class='btn small' data-overlay='prices' data-panel='prices'>Prices</button>
@@ -328,6 +330,15 @@
     <div id="gc-alerts-body" style="padding:12px;font-family:monospace;font-size:12px;background:#0d131c;border:1px solid #263244;border-top:none;">
       <div style="color:#8b949e;">Loading alerts…</div>
     </div>
+  </div>
+
+  <div id="gc-mini-ask-shell" style="margin:16px 20px 0;background:#101722;border:1px solid #263244;border-radius:12px;padding:12px 14px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="color:#8b949e;font-family:monospace;font-size:12px;min-width:92px;">Ask GeoClaw</div>
+      <input id="gc-mini-ask-input" placeholder="Ask a quick question from the terminal…" style="flex:1;min-width:240px;background:#0d131c;border:1px solid #30363d;color:#e6edf3;border-radius:8px;padding:9px 10px;font-size:13px;">
+      <button id="gc-mini-ask-btn" class="btn small">Ask</button>
+    </div>
+    <div id="gc-mini-ask-answer" style="display:none;margin-top:10px;padding:10px 12px;background:#0d131c;border:1px solid #263244;border-radius:8px;color:#c9d5e4;font-size:13px;line-height:1.6;"></div>
   </div>
 
   <div id='overlay' class='overlay' aria-hidden='true'>

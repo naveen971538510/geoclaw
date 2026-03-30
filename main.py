@@ -10,7 +10,7 @@ from helpers import (
 from fetcher import fetch_live_articles
 import html
 from fastapi.responses import JSONResponse
-from config import GEOCLAW_LOCAL_TOKEN
+from config import DB_PATH, GEOCLAW_LOCAL_TOKEN, OPENAI_API_KEY
 from services.logging_service import get_logger
 
 app = FastAPI()
@@ -32,6 +32,17 @@ def _mutation_guard(request: Request):
     if _local_client(request):
         return
     raise PermissionError("This route is limited to local requests")
+
+
+def _get_query_engine():
+    from services.query_engine import QueryEngine
+
+    llm = None
+    if OPENAI_API_KEY:
+        from services.llm_analyst import LLMAnalyst
+
+        llm = LLMAnalyst(str(DB_PATH))
+    return QueryEngine(str(DB_PATH), llm_analyst=llm)
 
 
 def render_search_form(value: str = "") -> str:
@@ -467,6 +478,13 @@ def geoclaw_dashboard():
     from services.terminal_ui_service import render_terminal_asset
 
     return HTMLResponse(render_terminal_asset("dashboard.html"))
+
+
+@app.get("/ask", response_class=HTMLResponse)
+def geoclaw_ask_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("ask.html"))
 
 
 @app.get("/theses", response_class=HTMLResponse)
@@ -1388,6 +1406,41 @@ def api_search(q: str = "", type: str = "all"):
         return JSONResponse({"status": "ok", **payload})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/search", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/ask", response_class=JSONResponse)
+def api_ask(q: str = ""):
+    try:
+        question = str(q or "").strip()
+        if not question:
+            return JSONResponse({"status": "error", "message": "q parameter required"}, status_code=400)
+        result = _get_query_engine().ask(question)
+        return JSONResponse({"status": "ok", **result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/ask", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/ask", response_class=JSONResponse)
+async def api_ask_post(request: Request):
+    try:
+        payload = await request.json()
+        question = str((payload or {}).get("question", "") or "").strip()
+        if not question:
+            return JSONResponse({"status": "error", "message": "question required"}, status_code=400)
+        result = _get_query_engine().ask(question)
+        return JSONResponse({"status": "ok", **result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/ask:post", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/ask/suggestions", response_class=JSONResponse)
+def api_ask_suggestions():
+    try:
+        from services.query_engine import SUGGESTIONS
+
+        return JSONResponse({"status": "ok", "suggestions": SUGGESTIONS})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/ask/suggestions", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/agent/status", response_class=JSONResponse)

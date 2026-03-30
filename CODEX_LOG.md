@@ -1311,3 +1311,41 @@ Morning commands:
   make prices
   make status
   open http://127.0.0.1:8000/dashboard
+
+## Night 5 — Phase 1
+
+Status: Natural language query engine complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/query_engine.py`
+- `/Users/naveenkumar/GeoClaw/ui/ask.html`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+- `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+- `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- `/Users/naveenkumar/GeoClaw/ui/agent_runs.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.js`
+
+Routes added:
+- `GET /ask`
+- `GET /api/ask`
+- `POST /api/ask`
+- `GET /api/ask/suggestions`
+
+Verification:
+- `python3 -m py_compile services/query_engine.py` ✓
+- `python3 -m py_compile main.py` ✓
+- `curl -s "http://127.0.0.1:8000/api/ask?q=what+is+driving+oil"` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- plain-English query engine over theses, articles, actions, contradictions, regime, and calibration
+- dedicated `/ask` page with suggestions, follow-ups, and local history
+- terminal shortcut button plus mini inline ask bar
