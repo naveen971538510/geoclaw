@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Portfolio</title>
+  <style>
+    :root{--bg:#0b1016;--panel:#101722;--panel-2:#151f2c;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--green:#2fb171;--red:#d95c5c;--yellow:#d39a33;--blue:#4da3ff}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:#0d131c;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none} nav strong{color:#fff}
+    .page{padding:18px 20px 40px}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+    .card,.panel,.form{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+    .card{padding:14px}
+    .card .label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+    .card .value{font-size:28px;font-weight:800;margin-top:6px}
+    .form{padding:14px;display:grid;grid-template-columns:repeat(7,minmax(0,1fr)) auto;gap:10px;margin-bottom:16px}
+    .panel{padding:14px;margin-bottom:16px}
+    input,select{background:#0d131c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:8px 12px;cursor:pointer}
+    .btn.red{background:#471e24;border-color:#7a2e38}
+    .btn.green{background:#153928;border-color:#2d7a54}
+    .muted{color:var(--muted)}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-size:12px;text-transform:uppercase}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+    .long{background:rgba(47,177,113,.18);color:#8ff0b2}
+    .short{background:rgba(217,92,92,.18);color:#ffb3b3}
+    .threat{border-left:4px solid var(--red);padding:10px 12px;background:var(--panel-2);border-radius:10px;margin-bottom:10px}
+    .ok-box{border-left:4px solid var(--green);padding:10px 12px;background:var(--panel-2);border-radius:10px}
+    @media (max-width: 1040px){.form{grid-template-columns:1fr}}
+    @media (max-width: 900px){.panel{overflow:auto}}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/ask">Ask</a>
+    <a class="gc-nav-link" href="/live">Live</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/portfolio">Portfolio</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <section class="stats">
+      <div class="card"><div class="label">Total Value</div><div class="value" id="pf-total-value">—</div></div>
+      <div class="card"><div class="label">Total P&amp;L</div><div class="value" id="pf-total-pnl">—</div></div>
+      <div class="card"><div class="label">Open Positions</div><div class="value" id="pf-total-count">—</div></div>
+    </section>
+
+    <section class="form">
+      <input id="pf-symbol" placeholder="Symbol">
+      <input id="pf-name" placeholder="Name">
+      <select id="pf-asset">
+        <option value="equity">Equity</option>
+        <option value="bond">Bond</option>
+        <option value="commodity">Commodity</option>
+        <option value="fx">FX</option>
+        <option value="crypto">Crypto</option>
+        <option value="other">Other</option>
+      </select>
+      <select id="pf-direction">
+        <option value="long">Long</option>
+        <option value="short">Short</option>
+      </select>
+      <input id="pf-qty" type="number" min="0" step="any" placeholder="Quantity">
+      <input id="pf-entry" type="number" min="0" step="any" placeholder="Entry price">
+      <input id="pf-notes" placeholder="Notes or tags">
+      <button class="btn green" id="pf-add-btn">Add Position</button>
+    </section>
+
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <h2 style="margin:0">Positions</h2>
+        <button class="btn" id="pf-refresh-btn">Refresh Prices</button>
+      </div>
+      <div id="pf-table" style="margin-top:12px">Loading portfolio…</div>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0">Agent Threats to Your Portfolio</h2>
+      <div id="pf-threats">Loading threats…</div>
+    </section>
+  </div>
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+    function money(v){ return Number(v || 0).toLocaleString(undefined, {maximumFractionDigits: 2, minimumFractionDigits: 2}); }
+    async function loadPortfolio(){
+      const data = await fetch('/api/portfolio').then(r => r.json());
+      const summary = data.summary || {};
+      document.getElementById('pf-total-value').textContent = '$' + money(summary.total_value || 0);
+      const pnl = Number(summary.total_pnl || 0);
+      const pnlEl = document.getElementById('pf-total-pnl');
+      pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${money(pnl)} (${Number(summary.total_pnl_pct || 0).toFixed(2)}%)`;
+      pnlEl.style.color = pnl >= 0 ? '#2fb171' : '#d95c5c';
+      document.getElementById('pf-total-count').textContent = String(summary.positions_count || (summary.positions || []).length || 0);
+      renderPositions(summary.positions || []);
+      return summary;
+    }
+    function renderPositions(items){
+      const wrap = document.getElementById('pf-table');
+      if (!items.length){
+        wrap.innerHTML = '<div class="muted">No open positions yet. Add a position to start tracking thesis exposure.</div>';
+        return;
+      }
+      wrap.innerHTML = `<table><thead><tr><th>Symbol</th><th>Name</th><th>Direction</th><th>Entry</th><th>Current</th><th>P&amp;L $</th><th>P&amp;L %</th><th>Notes</th><th></th></tr></thead><tbody>
+        ${items.map(item => `
+          <tr style="border-left:4px solid ${item.direction === 'short' ? '#d95c5c' : '#2fb171'}">
+            <td><strong>${esc(item.symbol || '')}</strong></td>
+            <td>${esc(item.name || '')}</td>
+            <td><span class="badge ${item.direction === 'short' ? 'short' : 'long'}">${esc(item.direction || 'long')}</span></td>
+            <td>${money(item.entry_price || 0)}</td>
+            <td>${item.current_price == null ? '—' : money(item.current_price)}</td>
+            <td style="color:${Number(item.pnl || 0) >= 0 ? '#2fb171' : '#d95c5c'}">${Number(item.pnl || 0) >= 0 ? '+' : ''}${money(item.pnl || 0)}</td>
+            <td style="color:${Number(item.pnl_pct || 0) >= 0 ? '#2fb171' : '#d95c5c'}">${Number(item.pnl_pct || 0) >= 0 ? '+' : ''}${Number(item.pnl_pct || 0).toFixed(2)}%</td>
+            <td>${esc(item.notes || '')}</td>
+            <td><button class="btn red" onclick="closePosition(${Number(item.id || 0)})">Close</button></td>
+          </tr>`).join('')}
+      </tbody></table>`;
+    }
+    async function loadThreats(){
+      const data = await fetch('/api/portfolio/threats').then(r => r.json());
+      const threats = data.threats || [];
+      const wrap = document.getElementById('pf-threats');
+      if (!threats.length){
+        wrap.innerHTML = '<div class="ok-box">No high-confidence portfolio threats detected right now.</div>';
+        return;
+      }
+      wrap.innerHTML = threats.map(item => `
+        <div class="threat">
+          <div><strong>${esc(item.position_symbol || '')}</strong> (${esc(item.position_direction || 'long')}) &larr; ${esc(item.threat_thesis || '')}</div>
+          <div class="muted" style="margin-top:4px">Confidence ${Math.round(Number(item.threat_confidence || 0) * 100)}% · Risk ${esc(item.terminal_risk || 'HIGH')} · Watch ${esc(item.watchlist_suggestion || 'n/a')}</div>
+        </div>
+      `).join('');
+    }
+    async function addPosition(){
+      const notes = document.getElementById('pf-notes').value.trim();
+      const payload = {
+        symbol: document.getElementById('pf-symbol').value.trim(),
+        name: document.getElementById('pf-name').value.trim(),
+        asset_type: document.getElementById('pf-asset').value,
+        direction: document.getElementById('pf-direction').value,
+        quantity: Number(document.getElementById('pf-qty').value || 0),
+        entry_price: Number(document.getElementById('pf-entry').value || 0),
+        notes,
+        tags: notes ? notes.split(',').map(v => v.trim()).filter(Boolean) : []
+      };
+      await fetch('/api/portfolio/positions', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      ['pf-symbol','pf-name','pf-qty','pf-entry','pf-notes'].forEach(id => { document.getElementById(id).value = ''; });
+      await refreshPortfolio();
+    }
+    async function closePosition(id){
+      await fetch('/api/portfolio/positions/' + encodeURIComponent(id), {method:'DELETE'});
+      await refreshPortfolio();
+    }
+    async function refreshPortfolio(){
+      await fetch('/api/portfolio/refresh-prices', {method:'POST'});
+      await loadPortfolio();
+      await loadThreats();
+    }
+    document.getElementById('pf-add-btn').addEventListener('click', addPosition);
+    document.getElementById('pf-refresh-btn').addEventListener('click', refreshPortfolio);
+    Promise.all([loadPortfolio(), loadThreats()]).catch(() => {
+      document.getElementById('pf-table').textContent = 'Could not load portfolio.';
+      document.getElementById('pf-threats').textContent = 'Could not load threats.';
+    });
+  </script>
+</body>
+</html>

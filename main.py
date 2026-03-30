@@ -536,6 +536,13 @@ def geoclaw_watchlist_page():
     return HTMLResponse(render_terminal_asset("watchlist.html"))
 
 
+@app.get("/portfolio", response_class=HTMLResponse)
+def geoclaw_portfolio_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("portfolio.html"))
+
+
 @app.get("/terminal-ui/terminal.css")
 def terminal_css():
     from services.terminal_ui_service import render_terminal_asset
@@ -1244,6 +1251,90 @@ def api_watchlist_remove(watch_id: str, request: Request):
         return JSONResponse({"status": "ok"})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/watchlist/delete", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/portfolio", response_class=JSONResponse)
+def api_portfolio():
+    try:
+        from services.portfolio_service import PortfolioService
+
+        summary = PortfolioService(str(DB_PATH)).get_pnl_summary()
+        return JSONResponse({"status": "ok", "summary": summary})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/portfolio", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/portfolio/positions", response_class=JSONResponse)
+async def api_portfolio_add_position(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.portfolio_service import PortfolioService
+
+        payload = await request.json()
+        symbol = str(payload.get("symbol", "") or "").strip()
+        if not symbol:
+            return JSONResponse({"status": "error", "route": "/api/portfolio/positions", "error": "symbol required"}, status_code=400)
+        position_id = PortfolioService(str(DB_PATH)).add_position(
+            symbol=symbol,
+            name=payload.get("name", ""),
+            asset_type=payload.get("asset_type", "other"),
+            direction=payload.get("direction", "long"),
+            quantity=payload.get("quantity", 0),
+            entry_price=payload.get("entry_price", 0),
+            currency=payload.get("currency", "USD"),
+            notes=payload.get("notes", ""),
+            tags=payload.get("tags", []) if isinstance(payload.get("tags", []), list) else [],
+        )
+        return JSONResponse({"status": "ok", "id": position_id})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/portfolio/positions", "error": str(exc)}, status_code=500)
+
+
+@app.delete("/api/portfolio/positions/{position_id:int}", response_class=JSONResponse)
+def api_portfolio_close_position(position_id: int, request: Request):
+    try:
+        _mutation_guard(request)
+        from datetime import datetime, timezone
+        from services.db_helpers import get_conn
+
+        conn = get_conn(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE portfolio_positions
+            SET status='closed', updated_at=?
+            WHERE id=?
+            """,
+            (datetime.now(timezone.utc).isoformat(), int(position_id)),
+        )
+        conn.commit()
+        conn.close()
+        return JSONResponse({"status": "ok"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/portfolio/positions/close", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/portfolio/threats", response_class=JSONResponse)
+def api_portfolio_threats():
+    try:
+        from services.portfolio_service import PortfolioService
+
+        threats = PortfolioService(str(DB_PATH)).get_thesis_threats()
+        return JSONResponse({"status": "ok", "threats": threats})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/portfolio/threats", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/portfolio/refresh-prices", response_class=JSONResponse)
+def api_portfolio_refresh_prices(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.portfolio_service import PortfolioService
+
+        result = PortfolioService(str(DB_PATH)).update_current_prices()
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/portfolio/refresh-prices", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/contradictions", response_class=JSONResponse)

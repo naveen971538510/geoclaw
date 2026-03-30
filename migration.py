@@ -596,6 +596,38 @@ def run_migration(verbose: bool = False):
     CREATE INDEX IF NOT EXISTS idx_sentiment_log_date
     ON sentiment_index_log(recorded_at DESC)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS portfolio_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        name TEXT,
+        asset_type TEXT,
+        direction TEXT DEFAULT 'long',
+        quantity REAL,
+        entry_price REAL,
+        current_price REAL,
+        currency TEXT DEFAULT 'USD',
+        notes TEXT,
+        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'open',
+        tags TEXT DEFAULT '[]'
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        total_value REAL,
+        pnl_total REAL,
+        pnl_pct REAL,
+        positions_count INTEGER,
+        captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_portfolio_status
+    ON portfolio_positions(status)
+    """)
 
     conn.commit()
 
@@ -621,6 +653,8 @@ def run_migration(verbose: bool = False):
             "llm_cache",
             "llm_usage_log",
             "sentiment_index_log",
+            "portfolio_positions",
+            "portfolio_snapshots",
         ]:
             cur.execute("SELECT COUNT(*) FROM " + table)
             count = cur.fetchone()[0]

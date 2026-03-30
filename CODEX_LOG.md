@@ -1547,3 +1547,47 @@ Highlights:
 - composite Fear & Greed index built from article tone, thesis confidence, high-risk clustering, and contradictions
 - score now persists to `sentiment_index_log` on agent runs and is exposed via current plus history APIs
 - dashboard now includes a gauge, 7-day sparkline, and sentiment driver breakdown
+
+## Night 5 — Phase 8
+
+Status: Portfolio tracker complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/portfolio_service.py`
+- `/Users/naveenkumar/GeoClaw/ui/portfolio.html`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/migration.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+- `/Users/naveenkumar/GeoClaw/ui/ask.html`
+- `/Users/naveenkumar/GeoClaw/ui/live.html`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+- `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+- `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- `/Users/naveenkumar/GeoClaw/ui/agent_runs.html`
+
+Routes added:
+- `GET /portfolio`
+- `GET /api/portfolio`
+- `POST /api/portfolio/positions`
+- `DELETE /api/portfolio/positions/{id}`
+- `GET /api/portfolio/threats`
+- `POST /api/portfolio/refresh-prices`
+
+Verification:
+- `python3 migration.py` ✓
+- `python3 -m py_compile services/portfolio_service.py migration.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/portfolio` ✓
+- `curl -s http://127.0.0.1:8000/api/portfolio/threats` ✓
+- `curl -s http://127.0.0.1:8000/portfolio` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- new position tracker with open-position summary, P&L calculation, and close-position workflow
+- threat radar ties open positions back to active HIGH-risk theses
+- consistent Portfolio nav entry added across the existing UI pages
