@@ -11,7 +11,8 @@ logger = logging.getLogger("geoclaw.dedup")
 
 
 class ThesisDeduplicator:
-    SIMILARITY_THRESHOLD = 0.72
+    # Tuned to catch realistic wording shuffles without collapsing unrelated theses.
+    SIMILARITY_THRESHOLD = 0.65
 
     def _tokenize(self, text: str) -> List[str]:
         cleaned = re.sub(r"[^\w\s]", " ", str(text or "").lower())

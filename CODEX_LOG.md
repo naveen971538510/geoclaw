@@ -1783,3 +1783,31 @@ Highlights:
 - GeoClaw now has a ready-to-load launch agent for starting the local server automatically on macOS login
 - the launch agent points at the project virtualenv and writes stdout/stderr into the project log files
 - local operators can enable, disable, and inspect the service directly through `make` shortcuts
+
+## Night 5 — Phase 15
+
+Status: Extended test suite complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/tests/support.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_query_engine.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_debate_engine.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_prediction_tracker.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_thesis_deduplicator.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_sentiment_index.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_exporter.py`
+- `/Users/naveenkumar/GeoClaw/tests/test_macro_calendar.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/thesis_deduplicator.py`
+
+Verification:
+- `python3 -m py_compile tests/support.py tests/test_query_engine.py tests/test_debate_engine.py tests/test_prediction_tracker.py tests/test_thesis_deduplicator.py tests/test_sentiment_index.py tests/test_exporter.py tests/test_macro_calendar.py` ✓
+- `python3 -m unittest tests.test_thesis_deduplicator -v` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests now passing: `105`
+
+Highlights:
+- the suite now covers natural-language querying, debate outputs, prediction tracking, deduplication, sentiment scoring, exports, and macro calendar logic
+- a shared temp-database fixture module keeps the new tests schema-aware and lightweight
+- thesis deduplication threshold was tuned from `0.72` to `0.65` so realistic near-duplicate phrasing now merges as intended
