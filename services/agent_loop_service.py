@@ -417,6 +417,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
     dedup_result = {"pairs_found": 0, "merged": 0, "superseded": [], "dry_run": False}
     sentiment_snapshot = {"score": 0.0, "label": "Neutral", "components": {}, "inputs": {}}
+    anomalies = []
     cooldown_blocked_actions = 0
     goal_cap_blocks = 0
     research_cap_blocks = 0
@@ -759,6 +760,24 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     except Exception as exc:
         logger.warning("Sentiment index failed: %s", exc)
         step_results["sentiment_index"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.alert_service import AlertService
+        from services.anomaly_detector import AnomalyDetector
+
+        anomalies = AnomalyDetector().detect_all(DB_PATH)
+        step_results["anomalies"] = {"status": "ok", "count": len(anomalies)}
+        for anomaly in anomalies:
+            if str(anomaly.get("severity", "")).upper() in {"HIGH", "EXTREME"}:
+                publish("anomaly_detected", anomaly)
+                AlertService(DB_PATH).fire(
+                    f"Anomaly: {anomaly.get('type', '')}",
+                    str(anomaly.get("description", "") or ""),
+                    alert_name="anomaly_" + str(anomaly.get("type", "") or "unknown"),
+                    cooldown_hours=1,
+                )
+    except Exception as exc:
+        logger.warning("Anomaly detection failed: %s", exc)
+        step_results["anomalies"] = {"status": "error", "error": str(exc)}
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -792,6 +811,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "sentiment_index": float(sentiment_snapshot.get("score", 0.0) or 0.0),
         "sentiment_label": str(sentiment_snapshot.get("label", "") or ""),
         "sentiment_components": sentiment_snapshot.get("components", {}) or {},
+        "anomalies_detected": len(anomalies),
         "cooldown_blocked_actions": cooldown_blocked_actions,
         "goal_cap_blocks": goal_cap_blocks,
         "research_cap_blocks": research_cap_blocks,
@@ -800,6 +820,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "cluster_cooldown_blocks": cluster_cooldown_blocks,
         "duration_seconds": duration_seconds,
         "steps": step_results,
+        "anomalies": anomalies[:10],
         "db_touched_counts": {
             "decisions": len(decisions),
             "tasks": len(tasks),

@@ -1929,3 +1929,30 @@ Highlights:
 - GeoClaw can now compute Pearson correlations across the stored price snapshot series without any external statistics dependency
 - the correlation route degrades safely when the history window is too shallow, returning a structured insufficiency payload instead of an error
 - thesis-specific correlation insight hooks are in place for future drilldown use
+
+## Night 5 — Phase 21
+
+Status: Anomaly detection complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/anomaly_detector.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+
+Routes added:
+- `GET /api/anomalies`
+
+Verification:
+- `python3 -m py_compile services/anomaly_detector.py services/agent_loop_service.py main.py` ✓
+- `python3 -c "open('ui/dashboard.html').read(); print('dashboard ok')"` ✓
+- `curl -s http://127.0.0.1:8000/api/anomalies | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `105`
+
+Highlights:
+- GeoClaw now flags unusual confidence spikes, contradiction storms, high-risk clustering, and article-volume surges
+- high-severity anomalies flow into both the event bus and the alert system during live agent runs
+- the dashboard exposes a top-of-page anomaly strip that stays hidden when the system is calm

@@ -88,6 +88,7 @@
   <div id="gc-ticker" style="background:#0d1117;border-bottom:1px solid #30363d;padding:6px 16px;font-size:11px;font-family:monospace;white-space:nowrap;overflow:hidden;color:#8b949e;">
     <span id="gc-ticker-content">Loading prices…</span>
   </div>
+  <div id="gc-anomaly-strip" style="display:none;background:rgba(248,81,73,0.18);border-bottom:1px solid #f85149;color:#ffd8d8;padding:10px 16px;font-size:13px;"></div>
   <div class="page">
     <div class="status-bar">
       <div class="status-pill">● Agent Live</div>
@@ -456,6 +457,18 @@
         </table>
       `;
     }
+    function renderAnomalies(anomalies){
+      const el = document.getElementById('gc-anomaly-strip');
+      if (!el) return;
+      const high = (anomalies || []).filter(item => ['HIGH', 'EXTREME'].includes(String(item.severity || '').toUpperCase()));
+      if (!high.length){
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+      }
+      el.style.display = 'block';
+      el.textContent = `⚠ ${high.length} anomalies detected: ${high.map(item => item.description).join(' | ')}`;
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -493,7 +506,7 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData, geoRiskData, sectorData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData, geoRiskData, sectorData, anomalyData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
@@ -506,7 +519,8 @@
           fetchJson('/api/sentiment/current'),
           fetchJson('/api/sentiment/history?days=7'),
           fetchJson('/api/geo-risk'),
-          fetchJson('/api/sectors')
+          fetchJson('/api/sectors'),
+          fetchJson('/api/anomalies')
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
@@ -538,6 +552,7 @@
         renderSentiment(sentimentData.index || {}, sentimentHistoryData.history || []);
         renderGeoRisk(geoRiskData.regions || {});
         renderSectorSignals(sectorData.sectors || {});
+        renderAnomalies(anomalyData.anomalies || []);
         gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';

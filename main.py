@@ -2102,6 +2102,17 @@ def api_correlations(hours: int = 48, symbols: str = ""):
         return JSONResponse({"status": "error", "route": "/api/correlations", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/anomalies", response_class=JSONResponse)
+def api_anomalies():
+    try:
+        from services.anomaly_detector import AnomalyDetector
+
+        anomalies = AnomalyDetector().detect_all(str(DB_PATH))
+        return JSONResponse({"status": "ok", "anomalies": anomalies, "count": len(anomalies)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/anomalies", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:
