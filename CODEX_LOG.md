@@ -1722,3 +1722,38 @@ Highlights:
 - GeoClaw can now be installed as a phone-friendly web app with a cached shell for core pages
 - every primary UI page advertises the manifest and registers the shared service worker on load
 - FastAPI now serves the static PWA assets directly, including a compatibility route for `/manifest.json`
+
+## Night 5 — Phase 13
+
+Status: CLI tool complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/geoclaw_cli.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/Makefile`
+
+Commands added:
+- `python3 geoclaw_cli.py status`
+- `python3 geoclaw_cli.py theses -n 10`
+- `python3 geoclaw_cli.py brief`
+- `python3 geoclaw_cli.py run`
+- `python3 geoclaw_cli.py ingest`
+- `python3 geoclaw_cli.py ask <question>`
+- `python3 geoclaw_cli.py prices [symbols...]`
+- `python3 geoclaw_cli.py export theses|articles|briefing|json`
+- `python3 geoclaw_cli.py migrate`
+
+Verification:
+- `python3 -m py_compile geoclaw_cli.py` ✓
+- `python3 geoclaw_cli.py status` ✓
+- `python3 geoclaw_cli.py theses -n 5` ✓
+- `python3 geoclaw_cli.py ask what is driving oil right now` ✓
+- `python3 geoclaw_cli.py prices GC=F CL=F` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- the CLI works directly against the local database, so common workflows no longer require the web server to be open
+- operational targets were added to `Makefile` for `ask`, `cli-status`, and `cli-theses`
+- command output is schema-aware for the Night 4/5 tables, including `agent_briefings` and current thesis state

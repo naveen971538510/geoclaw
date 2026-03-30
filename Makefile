@@ -1,4 +1,4 @@
-.PHONY: install migrate start test smoke prices ingest reason brief log status compile clean
+.PHONY: install migrate start test smoke prices ingest reason brief log status compile clean ask cli-status cli-theses
 
 root   = /Users/naveenkumar/GeoClaw
 act    = source $(root)/venv/bin/activate &&
@@ -44,5 +44,14 @@ compile:
 
 clean:
 	find $(root) -name "*.bak*" -delete && find $(root) -name "__pycache__" -exec rm -rf {} + 2>/dev/null; true
+
+ask:
+	cd $(root) && $(act) python3 geoclaw_cli.py ask $(ARGS)
+
+cli-status:
+	cd $(root) && $(act) python3 geoclaw_cli.py status
+
+cli-theses:
+	cd $(root) && $(act) python3 geoclaw_cli.py theses -n 10
 
 all: migrate compile test
