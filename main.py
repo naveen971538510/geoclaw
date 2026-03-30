@@ -2079,6 +2079,17 @@ def api_geo_risk():
         return JSONResponse({"status": "error", "route": "/api/geo-risk", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/sectors", response_class=JSONResponse)
+def api_sectors():
+    try:
+        from services.sector_rotation import SectorRotation
+
+        sectors = SectorRotation().compute_signals(str(DB_PATH))
+        return JSONResponse({"status": "ok", "sectors": sectors, "computed_at": datetime.now(timezone.utc).isoformat()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/sectors", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

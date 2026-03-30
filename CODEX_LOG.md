@@ -1879,3 +1879,29 @@ Highlights:
 - GeoClaw now computes regional risk concentration directly from active theses and the last 24 hours of article flow
 - the dashboard includes a geographic heatmap tile grid with risk score, region-level velocity, and top-thesis context
 - dashboard auto-refresh now keeps the regional view current every five minutes alongside the existing ticker refresh
+
+## Night 5 — Phase 19
+
+Status: Sector rotation signals complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/sector_rotation.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+
+Routes added:
+- `GET /api/sectors`
+
+Verification:
+- `python3 -m py_compile services/sector_rotation.py main.py` ✓
+- `python3 -c "open('ui/dashboard.html').read(); print('dashboard ok')"` ✓
+- `curl -s http://127.0.0.1:8000/api/sectors | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `105`
+
+Highlights:
+- GeoClaw now maps active theses into sector tilts with ETF proxies, signal scores, and trend direction
+- the dashboard includes a compact sector rotation table alongside the broader macro and regional views
+- energy and conflict-linked sectors now surface clearly when risk narratives intensify
