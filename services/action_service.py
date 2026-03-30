@@ -61,6 +61,9 @@ def _fetch_action(action_id: int) -> Dict:
             confidence,
             evidence_count,
             status,
+            approval_state,
+            reason,
+            metadata,
             triggered_by,
             created_at,
             reviewed_at,
@@ -81,6 +84,10 @@ def _fetch_action(action_id: int) -> Dict:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
     except Exception:
         item["payload"] = {}
+    try:
+        item["metadata"] = json.loads(item.get("metadata") or "{}")
+    except Exception:
+        item["metadata"] = {}
     thesis = get_thesis(item.get("thesis_key", ""))
     item["thesis_claim"] = (thesis or {}).get("current_claim", "")
     item["thesis_title"] = (thesis or {}).get("title", "") or item["thesis_claim"]
@@ -101,6 +108,9 @@ def list_actions(limit: int = 100) -> List[Dict]:
             confidence,
             evidence_count,
             status,
+            approval_state,
+            reason,
+            metadata,
             triggered_by,
             created_at,
             reviewed_at,
@@ -172,7 +182,7 @@ def _has_open_action(cur, thesis_key: str, action_type: str) -> int:
         FROM agent_actions
         WHERE LOWER(COALESCE(thesis_key, '')) = ?
           AND action_type = ?
-          AND status IN ('draft', 'proposed', 'auto_approved', 'approved')
+          AND status IN ('draft', 'proposed', 'auto_approved', 'approved', 'pending')
           AND COALESCE(executed_at, '') = ''
         ORDER BY id DESC
         LIMIT 1
@@ -282,7 +292,12 @@ def propose_action(action_type, payload, thesis_key, confidence, evidence_count,
         }
 
     status, policy_note = _policy_outcome(confidence_value, evidence_value)
+    approval_state = status
     audit_note = f"{policy_note}; triggered_by={str(triggered_by or 'system')}"
+    action_reason = (
+        str((payload or {}).get("reason") or "").strip()
+        or str(detail.get("current_claim", "") or detail.get("title", "") or clean_key).strip()
+    )[:240]
     now = utc_now_iso()
 
     conn = get_conn()
@@ -296,9 +311,9 @@ def propose_action(action_type, payload, thesis_key, confidence, evidence_count,
         """
         INSERT INTO agent_actions (
             action_type, payload_json, thesis_key, confidence, evidence_count, status,
-            triggered_by, created_at, reviewed_at, executed_at, audit_note
+            approval_state, reason, metadata, triggered_by, created_at, reviewed_at, executed_at, audit_note
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             clean_type,
@@ -307,6 +322,9 @@ def propose_action(action_type, payload, thesis_key, confidence, evidence_count,
             confidence_value,
             evidence_value,
             status,
+            approval_state,
+            action_reason,
+            json.dumps({}, ensure_ascii=False),
             str(triggered_by or "system"),
             now,
             now if status == "auto_approved" else "",
@@ -353,7 +371,7 @@ def approve_action(action_id, approved_by) -> Dict:
     cur.execute(
         """
         UPDATE agent_actions
-        SET status = 'approved', reviewed_at = ?, audit_note = ?
+        SET status = 'approved', approval_state = 'approved', reviewed_at = ?, audit_note = ?
         WHERE id = ?
         """,
         (now, note, int(action_id)),
@@ -386,7 +404,7 @@ def reject_action(action_id, reason) -> Dict:
     cur.execute(
         """
         UPDATE agent_actions
-        SET status = 'rejected', reviewed_at = ?, audit_note = ?
+        SET status = 'rejected', approval_state = 'rejected', reviewed_at = ?, audit_note = ?
         WHERE id = ?
         """,
         (now, note, int(action_id)),

@@ -76,6 +76,8 @@ def build_reasoning_chain(headline, category, db=None, article_id=None, thesis_k
         cache_key=f"reasoning::{normalize_thesis_key(headline)}::{category}",
         validator=_valid,
         cleaner=_clean,
+        lane="reason",
+        task_type="reasoning_chain",
     )["analysis"]
 
     conn = db or get_conn()

@@ -1,5 +1,7 @@
 import sqlite3
 
+from services.ai_contracts import default_debate_argument
+
 
 PERSONAS = {
     "bull": {
@@ -26,6 +28,13 @@ class DebateEngine:
         self.db_path = db_path
         self.llm = llm_analyst
 
+    def _table_exists(self, conn, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (str(table_name or "").strip(),),
+        ).fetchone()
+        return bool(row)
+
     def debate_thesis(self, thesis_key: str) -> dict:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -43,6 +52,28 @@ class DebateEngine:
             """,
             (f"%{str(thesis_key or '')[:30]}%",),
         ).fetchall()
+        history = []
+        if self._table_exists(conn, "thesis_confidence_log"):
+            history = conn.execute(
+                """
+                SELECT confidence, recorded_at
+                FROM thesis_confidence_log
+                WHERE thesis_key=?
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT 4
+                """,
+                (thesis_key,),
+            ).fetchall()
+        contradiction_row = None
+        if self._table_exists(conn, "contradictions"):
+            contradiction_row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM contradictions
+                WHERE thesis_key=? AND COALESCE(resolved, 0)=0
+                """,
+                (thesis_key,),
+            ).fetchone()
         conn.close()
 
         if not thesis:
@@ -51,10 +82,15 @@ class DebateEngine:
         thesis_dict = dict(thesis)
         confidence_pct = round(float(thesis_dict.get("confidence", 0.0) or 0.0) * 100)
         evidence = int(thesis_dict.get("evidence_count", 0) or 0)
+        velocity = float(thesis_dict.get("confidence_velocity", 0.0) or 0.0)
+        contradiction_count = int((contradiction_row["cnt"] if contradiction_row else 0) or 0)
         context = (
             f"Thesis: {thesis_key}\n"
             f"Current confidence: {confidence_pct}%\n"
+            f"Confidence velocity: {velocity:+.3f}\n"
             f"Evidence articles: {evidence}\n"
+            f"Contradictions: {contradiction_count}\n"
+            f"Confidence history: {[round(float(row['confidence'] or 0.0) * 100) for row in history]}\n"
             f"Recent headlines: {'; '.join([row['headline'] for row in recent_articles])}"
         )
 
@@ -84,28 +120,20 @@ class DebateEngine:
         }
 
     def _get_argument(self, persona: str, context: str, thesis_key: str, confidence_pct: int):
-        if self.llm and self.llm.available():
+        fallback = default_debate_argument(
+            persona=persona,
+            argument="The thesis needs more evidence before the debate can move materially.",
+            key_point="Evidence is still building",
+        )
+        if self.llm and self.llm.available() and hasattr(self.llm, "debate_argument"):
             try:
-                import json
-                import openai
-                import os
-
-                client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": PERSONAS[persona]["system"]},
-                        {"role": "user", "content": context},
-                    ],
-                    max_tokens=200,
-                    temperature=0.7,
-                    response_format={"type": "json_object"},
+                result = self.llm.debate_argument(
+                    persona=persona,
+                    system_prompt=PERSONAS[persona]["system"],
+                    context=context,
+                    fallback=fallback,
                 )
-                result = json.loads(response.choices[0].message.content)
-                return {
-                    "argument": str(result.get("argument", "") or ""),
-                    "key_point": str(result.get("key_point", "") or ""),
-                }, "llm"
+                return result, "llm"
             except Exception:
                 pass
 

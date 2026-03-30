@@ -67,7 +67,25 @@
     .geo-tile{border-radius:14px;padding:14px;border:1px solid var(--line);min-height:128px}
     .geo-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
     .geo-score{font-size:28px;font-weight:800}
+    .ask-shell{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+    .ask-shell input{width:100%;padding:16px 18px;border-radius:14px;border:1px solid #35557d;background:#0c131d;color:var(--text);font-size:18px;outline:none}
+    .ask-suggestions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .ask-chip{border:1px solid var(--line);background:#141c28;color:#d4dceb;border-radius:999px;padding:8px 12px;cursor:pointer}
+    .decision-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin-bottom:18px}
+    .triple-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;margin-bottom:18px}
+    .decision-list,.event-list,.action-list,.prediction-list{display:grid;gap:10px}
+    .decision-item,.event-item,.action-item,.prediction-item,.thesis-card{background:var(--panel-2);border:1px solid var(--line);border-radius:14px;padding:12px}
+    .thesis-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .thesis-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+    .pill{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:999px;font-size:11px;border:1px solid var(--line);color:#d7e0ef;background:#111826}
+    .action-counts,.prediction-counts{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .counter{background:#111826;border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:90px}
+    .counter .k{color:var(--muted);font-size:11px;text-transform:uppercase}
+    .counter .v{font-size:22px;font-weight:800;margin-top:3px}
+    .inline-link{color:#9cc7ff;text-decoration:none}
+    .mini-note{color:var(--muted);font-size:12px}
     @media (max-width: 960px){.two-col{grid-template-columns:1fr}}
+    @media (max-width: 960px){.decision-grid,.triple-grid{grid-template-columns:1fr}.ask-shell{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -95,6 +113,66 @@
       <div id="statusText" class="grow">Loading status…</div>
       <button class="btn" id="runNowBtn">▶ Run Agent Now</button>
     </div>
+
+    <section class="panel" style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <h2 style="margin-bottom:4px">Ask GeoClaw</h2>
+          <div class="muted">Ask directly from the dashboard and jump to a deeper answer only when you need it.</div>
+        </div>
+        <a class="inline-link" href="/ask">Open full Ask page →</a>
+      </div>
+      <div class="ask-shell" style="margin-top:14px">
+        <input id="gc-dashboard-ask-input" placeholder="What changed in oil risk since the last run?">
+        <button class="btn" id="gc-dashboard-ask-btn">Ask</button>
+      </div>
+      <div id="gc-dashboard-ask-suggestions" class="ask-suggestions"></div>
+      <div id="gc-dashboard-ask-answer" class="decision-item" style="display:none;margin-top:12px"></div>
+    </section>
+
+    <section class="decision-grid">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px">
+          <h2 style="margin:0">What Changed Since Last Run</h2>
+          <div class="mini-note" id="gc-last-run-duration">Loading…</div>
+        </div>
+        <div id="gc-change-panel" class="decision-list"><div class="skeleton"></div></div>
+      </div>
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px">
+          <h2 style="margin:0">Live Events</h2>
+          <a class="inline-link" href="/live">Open full feed →</a>
+        </div>
+        <div id="gc-live-events" class="event-list"><div class="skeleton"></div></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom:18px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0">Top Theses</h2>
+        <a class="inline-link" href="/theses">Open thesis explorer →</a>
+      </div>
+      <div id="gc-top-thesis-cards" class="thesis-cards"><div class="skeleton" style="height:160px"></div></div>
+    </section>
+
+    <section class="triple-grid">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px">
+          <h2 style="margin:0">Action Queue</h2>
+          <a class="inline-link" href="/terminal">Review in terminal →</a>
+        </div>
+        <div class="action-counts" id="gc-action-counts"></div>
+        <div id="gc-action-queue" class="action-list"><div class="skeleton" style="height:120px"></div></div>
+      </div>
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px">
+          <h2 style="margin:0">Prediction Truth</h2>
+          <a class="inline-link" href="/theses">Open predictions →</a>
+        </div>
+        <div class="prediction-counts" id="gc-prediction-counts"></div>
+        <div id="gc-prediction-truth" class="prediction-list"><div class="skeleton" style="height:120px"></div></div>
+      </div>
+    </section>
 
     <section class="grid stats" id="statsGrid">
       <div class="panel stat-card"><div class="label">Active Theses</div><div class="value" id="statTheses">…</div></div>
@@ -155,7 +233,13 @@
 
     <section class="grid two-col">
       <div class="panel">
-        <h2>Latest Briefing</h2>
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+          <h2 style="margin:0">Latest Briefing</h2>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="ask-chip" data-briefing-tab="briefing">Intelligence Brief</button>
+            <button class="ask-chip" data-briefing-tab="autonomy">Autonomy Report</button>
+          </div>
+        </div>
         <div class="muted" id="briefingMeta">Loading…</div>
         <pre id="briefingText">Loading briefing…</pre>
       </div>
@@ -469,6 +553,251 @@
       el.style.display = 'block';
       el.textContent = `⚠ ${high.length} anomalies detected: ${high.map(item => item.description).join(' | ')}`;
     }
+    function renderDashboardSuggestions(items){
+      const wrap = document.getElementById('gc-dashboard-ask-suggestions');
+      if (!wrap) return;
+      wrap.innerHTML = (items || []).slice(0, 3).map(item =>
+        `<button class="ask-chip" data-dashboard-suggestion="${esc(item)}">${esc(item)}</button>`
+      ).join('');
+      document.querySelectorAll('[data-dashboard-suggestion]').forEach(node => {
+        node.addEventListener('click', () => {
+          const question = node.getAttribute('data-dashboard-suggestion') || '';
+          document.getElementById('gc-dashboard-ask-input').value = question;
+          gcDashboardAsk(question);
+        });
+      });
+    }
+    function renderDashboardAskResult(payload){
+      const wrap = document.getElementById('gc-dashboard-ask-answer');
+      if (!wrap) return;
+      const card = payload.answer_card || {};
+      const points = (card.supporting_points || []).slice(0, 3);
+      wrap.style.display = 'block';
+      wrap.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div style="font-size:16px;font-weight:700">${esc(card.direct_answer || payload.answer || 'No answer returned.')}</div>
+          <div class="mini-note">Confidence ${Math.round(Number(payload.confidence || 0) * 100)}%</div>
+        </div>
+        ${points.length ? `<div class="decision-list" style="margin-top:10px">${points.map(point => `<div class="mini-note">• ${esc(point)}</div>`).join('')}</div>` : ''}
+      `;
+    }
+    async function gcDashboardAsk(question){
+      const clean = String(question || '').trim();
+      if (!clean) return;
+      const wrap = document.getElementById('gc-dashboard-ask-answer');
+      if (wrap){
+        wrap.style.display = 'block';
+        wrap.innerHTML = '<div class="mini-note">Thinking…</div>';
+      }
+      try{
+        const payload = await fetchJson('/api/ask?q=' + encodeURIComponent(clean));
+        renderDashboardAskResult(payload);
+      }catch(err){
+        if (wrap){
+          wrap.style.display = 'block';
+          wrap.innerHTML = `<div class="error">Could not answer: ${esc(err.message || 'request failed')}</div>`;
+        }
+      }
+    }
+    function renderChangePanel(changes){
+      const wrap = document.getElementById('gc-change-panel');
+      const meta = document.getElementById('gc-last-run-duration');
+      if (!wrap || !changes) return;
+      const moves = (changes.top_confidence_changes || []).slice(0, 3);
+      const runGoals = (changes.run_goals || []).slice(0, 5);
+      const newActions = changes.new_actions || [];
+      const newAlerts = changes.new_alerts || [];
+      const newContradictions = changes.new_contradictions || [];
+      const newAnomalies = changes.new_anomalies || [];
+      const research = changes.research || {};
+      const researchNeeds = (research.needs || []).slice(0, 2);
+      const researchLog = (research.log || []).slice(0, 2);
+      if (meta) {
+        const seconds = Number(changes.last_run_duration || 0);
+        meta.textContent = `Last run ${seconds ? seconds.toFixed(1) + 's' : 'duration n/a'}${changes.latest_run_at ? ' · ' + timeAgo(changes.latest_run_at) : ''}`;
+      }
+      wrap.innerHTML = `
+        <div class="decision-item">
+          <div style="font-weight:700">🎯 Agent Goals This Run</div>
+          <div class="mini-note" style="margin-top:8px">${runGoals.length ? runGoals.map(goal => `<div style="margin-top:6px"><span class="pill">goal</span> ${esc(goal)}</div>`).join('') : 'No explicit goals were logged for the latest run.'}</div>
+        </div>
+        <div class="decision-item">
+          <div style="font-weight:700">Top thesis confidence changes</div>
+          <div class="mini-note" style="margin-top:8px">${moves.length ? moves.map(item => {
+            const delta = Number(item.delta || 0);
+            const arrow = delta > 0 ? '▲' : (delta < 0 ? '▼' : '→');
+            const color = delta > 0 ? '#3fb950' : (delta < 0 ? '#f85149' : '#8b949e');
+            return `<div style="margin-top:6px"><span style="color:${color}">${arrow} ${(delta * 100).toFixed(1)} pts</span> · ${esc(item.thesis_key || '')}</div>`;
+          }).join('') : 'No meaningful confidence moves were recorded in the latest run.'}</div>
+        </div>
+        <div class="decision-item"><div style="font-weight:700">New actions proposed</div><div class="mini-note" style="margin-top:8px">${newActions.length ? newActions.map(item => `${esc(item.action_type || 'action')} · ${esc((item.thesis_key || '').slice(0, 90))}`).join('<br>') : 'No newly proposed actions.'}</div></div>
+        <div class="decision-item"><div style="font-weight:700">New alerts fired</div><div class="mini-note" style="margin-top:8px">${newAlerts.length ? newAlerts.map(item => esc(item.title || item.alert_type || 'alert')).join('<br>') : 'No new alerts fired.'}</div></div>
+        <div class="decision-item"><div style="font-weight:700">New contradictions / anomalies</div><div class="mini-note" style="margin-top:8px">${newContradictions.length ? newContradictions.length + ' contradictions' : 'No new contradictions'} · ${newAnomalies.length ? newAnomalies.length + ' anomalies' : 'no anomalies'}</div></div>
+        <div class="decision-item">
+          <div style="font-weight:700">Research</div>
+          <div class="mini-note" style="margin-top:8px">
+            🔍 Active research: ${Number(research.searches_done || 0)} searches, ${Number(research.articles_found || 0)} articles found, ${Number(research.articles_saved || 0)} saved
+          </div>
+          <div class="mini-note" style="margin-top:6px">
+            ${researchNeeds.length ? researchNeeds.map(item => `Need: ${esc(item.reason || item.thesis_key || '')}`).join('<br>') : (researchLog.length ? researchLog.map(item => `Searched: ${esc(item.query || '')} (${Number(item.result_count || 0)} results)`).join('<br>') : 'No active research was needed in the latest run.')}
+          </div>
+        </div>
+      `;
+    }
+    function renderTopThesisCards(items){
+      const wrap = document.getElementById('gc-top-thesis-cards');
+      if (!wrap) return;
+      const theses = items || [];
+      if (!theses.length){
+        wrap.innerHTML = '<div class="muted">No active theses yet.</div>';
+        return;
+      }
+      wrap.innerHTML = theses.map(item => {
+        const confidence = Math.round(Number(item.confidence || 0) * 100);
+        const velocity = Number(item.confidence_velocity || 0);
+        const velocityArrow = velocity > 0.02 ? '↑' : (velocity < -0.02 ? '↓' : '→');
+        const velocityColor = velocity > 0.02 ? '#3fb950' : (velocity < -0.02 ? '#f85149' : '#8b949e');
+        return `
+          <div class="thesis-card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+              <div style="font-weight:700;font-size:15px">${esc(item.title || item.thesis_key || '')}</div>
+              <div style="font-size:22px;font-weight:800">${confidence}%</div>
+            </div>
+            <div class="thesis-meta">
+              <span class="pill" style="color:${velocityColor}">${velocityArrow} ${velocity.toFixed(3)}</span>
+              <span class="pill">${esc(item.status || 'active')}</span>
+              <span class="pill">${esc(item.terminal_risk || 'LOW')} risk</span>
+              <span class="pill">${esc(item.timeframe || 'days')}</span>
+            </div>
+            <div class="mini-note">${esc(item.last_update_reason || 'No update reason recorded.')}</div>
+            <div style="margin-top:8px">${esc(item.why_now || 'Fresh evidence moved this thesis in the latest run.')}</div>
+            <div style="margin-top:10px"><a class="inline-link" href="/theses?focus=${encodeURIComponent(item.thesis_key || '')}">Open thesis drilldown →</a></div>
+          </div>
+        `;
+      }).join('');
+    }
+    function renderActionQueue(queue){
+      const countWrap = document.getElementById('gc-action-counts');
+      const listWrap = document.getElementById('gc-action-queue');
+      if (!countWrap || !listWrap) return;
+      const counts = (queue || {}).counts || {};
+      countWrap.innerHTML = ['pending','draft','approved','rejected'].map(key => `
+        <div class="counter">
+          <div class="k">${esc(key)}</div>
+          <div class="v">${Number(counts[key] || 0)}</div>
+        </div>
+      `).join('');
+      const items = (queue || {}).items || [];
+      listWrap.innerHTML = items.length ? items.map(item => `
+        <div class="action-item">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+            <div style="font-weight:700">${esc(item.action_type || 'action')}</div>
+            <span class="pill">${esc(item.approval_state || item.status || 'pending')}</span>
+          </div>
+          <div class="mini-note" style="margin-top:6px">${esc((item.thesis_key || '').slice(0, 140))}</div>
+          <div style="margin-top:8px">${esc(item.reason || item.why_now || 'No reason recorded.')}</div>
+          <div class="mini-note" style="margin-top:6px">${esc(item.why_now || '')}</div>
+        </div>
+      `).join('') : '<div class="muted">No actionable items are queued right now.</div>';
+    }
+    function renderPredictionTruth(panel){
+      const countWrap = document.getElementById('gc-prediction-counts');
+      const listWrap = document.getElementById('gc-prediction-truth');
+      if (!countWrap || !listWrap) return;
+      const item = panel || {};
+      countWrap.innerHTML = `
+        <div class="counter"><div class="k">Verified</div><div class="v">${Number(item.verified || 0)}</div></div>
+        <div class="counter"><div class="k">Refuted</div><div class="v">${Number(item.refuted || 0)}</div></div>
+        <div class="counter"><div class="k">Neutral</div><div class="v">${Number(item.neutral || 0)}</div></div>
+        <div class="counter"><div class="k">Hit Rate</div><div class="v">${Number(item.hit_rate_pct || 0).toFixed(1)}%</div></div>
+      `;
+      const latest = item.latest || [];
+      listWrap.innerHTML = latest.length ? latest.map(pred => `
+        <div class="prediction-item">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+            <div style="font-weight:700">${esc(pred.symbol || 'n/a')}</div>
+            <span class="pill">${esc(pred.outcome || 'pending')}</span>
+          </div>
+          <div class="mini-note" style="margin-top:6px">${esc((pred.thesis_key || '').slice(0, 140))}</div>
+          <div style="margin-top:8px">${esc(pred.outcome_note || '')}</div>
+        </div>
+      `).join('') : '<div class="muted">No checked predictions yet.</div>';
+    }
+    let gcLiveEventsCache = [];
+    const gcBriefingViews = {briefing: {}, autonomy: {}};
+    let gcActiveBriefingTab = 'briefing';
+    function renderLiveEvents(items){
+      const wrap = document.getElementById('gc-live-events');
+      if (!wrap) return;
+      const events = (items || []).filter(item => item && item.type && item.type !== 'heartbeat').slice(0, 5);
+      gcLiveEventsCache = events;
+      wrap.innerHTML = events.length ? events.map(item => `
+        <div class="event-item">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+            <div style="font-weight:700">${esc(item.type || 'event')}</div>
+            <div class="mini-note">${item.timestamp ? timeAgo(new Date(Number(item.timestamp) * 1000).toISOString()) : 'now'}</div>
+          </div>
+          <div style="margin-top:6px">${esc(item.description || '')}</div>
+        </div>
+      `).join('') : '<div class="muted">Waiting for meaningful events…</div>';
+    }
+    function appendLiveEvent(item){
+      if (!item || item.type === 'heartbeat') return;
+      gcLiveEventsCache = [item].concat((gcLiveEventsCache || []).filter(existing => existing.timestamp !== item.timestamp || existing.type !== item.type)).slice(0, 5);
+      renderLiveEvents(gcLiveEventsCache);
+    }
+    function bindDashboardAsk(){
+      const button = document.getElementById('gc-dashboard-ask-btn');
+      const input = document.getElementById('gc-dashboard-ask-input');
+      if (button && !button.dataset.bound){
+        button.dataset.bound = '1';
+        button.addEventListener('click', () => gcDashboardAsk(input.value));
+      }
+      if (input && !input.dataset.bound){
+        input.dataset.bound = '1';
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            gcDashboardAsk(event.target.value);
+          }
+        });
+      }
+    }
+    function renderBriefingTab(){
+      const key = gcActiveBriefingTab === 'autonomy' ? 'autonomy' : 'briefing';
+      const payload = gcBriefingViews[key] || {};
+      document.getElementById('briefingMeta').textContent = payload.generated_at ? ('Generated ' + payload.generated_at + (key === 'autonomy' ? ' · autonomy report' : '')) : 'Generated on demand';
+      document.getElementById('briefingText').textContent = payload.briefing_text || 'No briefing text available.';
+      document.querySelectorAll('[data-briefing-tab]').forEach(node => {
+        const active = node.getAttribute('data-briefing-tab') === key;
+        node.style.borderColor = active ? '#4da3ff' : '#263244';
+        node.style.color = active ? '#f4f7fb' : '#90a0b7';
+      });
+    }
+    function bindBriefingTabs(){
+      document.querySelectorAll('[data-briefing-tab]').forEach(node => {
+        if (node.dataset.bound) return;
+        node.dataset.bound = '1';
+        node.addEventListener('click', () => {
+          gcActiveBriefingTab = node.getAttribute('data-briefing-tab') === 'autonomy' ? 'autonomy' : 'briefing';
+          renderBriefingTab();
+        });
+      });
+    }
+    function initDashboardEventStream(){
+      if (window.gcDashboardEventSource) return;
+      try{
+        const es = new EventSource('/api/events/stream');
+        es.onmessage = (event) => {
+          try{
+            const payload = JSON.parse(event.data);
+            if (payload.type === 'heartbeat') return;
+            appendLiveEvent(payload);
+          }catch(err){}
+        };
+        window.gcDashboardEventSource = es;
+      }catch(err){}
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -506,10 +835,12 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData, geoRiskData, sectorData, anomalyData] = await Promise.all([
+        const [decisionViewData, thesesData, agentData, briefingData, autonomyBriefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData, geoRiskData, sectorData, anomalyData] = await Promise.all([
+          fetchJson('/api/dashboard/decision-view'),
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
+          fetchJson('/agent-briefing/latest?format=autonomy_report'),
           fetchJson('/terminal/agent-summary'),
           fetchJson('/api/alerts/unread/count'),
           fetchJson('/api/intelligence/narratives'),
@@ -524,7 +855,10 @@
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
-        const briefing = briefingData.item || {};
+        bindDashboardAsk();
+        bindBriefingTabs();
+        gcBriefingViews.briefing = briefingData.item || {};
+        gcBriefingViews.autonomy = autonomyBriefingData.item || {};
 
         document.getElementById('statusText').textContent =
           'Last run: ' + (agent.last_run_at ? timeAgo(agent.last_run_at) : 'never') +
@@ -553,10 +887,14 @@
         renderGeoRisk(geoRiskData.regions || {});
         renderSectorSignals(sectorData.sectors || {});
         renderAnomalies(anomalyData.anomalies || []);
+        renderDashboardSuggestions(decisionViewData.ask_suggestions || []);
+        renderChangePanel(decisionViewData.changes || {});
+        renderTopThesisCards(decisionViewData.top_theses || []);
+        renderActionQueue(decisionViewData.action_queue || {});
+        renderPredictionTruth(decisionViewData.prediction_truth || {});
+        renderLiveEvents(decisionViewData.live_events || []);
         gcLoadRunChart();
-
-        document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';
-        document.getElementById('briefingText').textContent = briefing.briefing_text || 'No briefing text available.';
+        renderBriefingTab();
       }catch(err){
         document.getElementById('statusText').textContent = '⚠ Could not load dashboard';
         document.getElementById('confidenceBuckets').innerHTML = '<div class="error">⚠ Could not load</div>';
@@ -581,6 +919,7 @@
 
     loadDashboard();
     gcLoadTicker();
+    initDashboardEventStream();
     setInterval(gcLoadTicker, 60000);
     setInterval(loadDashboard, 300000);
   </script>

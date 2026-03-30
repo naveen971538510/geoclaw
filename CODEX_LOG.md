@@ -2018,3 +2018,59 @@ python3 geoclaw_cli.py ask what is the risk right now
 open http://127.0.0.1:8000/dashboard
 open http://127.0.0.1:8000/ask
 open http://127.0.0.1:8000/live
+
+## Night 6 — Closing the Real Gaps
+
+### The three gaps closed tonight
+
+GAP 1: Passive → Active eyes
+- `services/web_searcher.py` — DuckDuckGo search, trafilatura body extraction
+- `services/active_researcher.py` — identifies knowledge gaps, searches to fill them
+- `web_search_log` table — every search the agent performs, auditable
+- `web_sourced_articles` table — articles found by agent itself, not RSS
+
+GAP 2: Static → Self-writing brain
+- `services/rule_learner.py` — analyses prediction history, writes new rules
+- `learned_rules` table — the agent's own rule book (separate from hardcoded)
+- `services/rule_engine.py` extended — loads and applies learned rules alongside hardcoded
+
+GAP 3: Proposals → Real execution
+- `services/action_executor.py` — executes approved actions (watchlist, email, Telegram, webhook, local logging)
+- `AUTO_APPROVE_SAFE` list — safe actions execute without human click
+- agent loop now auto-executes safe actions and can execute approved actions immediately
+
+### Three new supporting systems
+- `services/agent_memory.py` — remembers decisions and patterns across runs
+- `services/goal_planner.py` — sets its own research agenda each run
+- `services/budget_manager.py` — allocates LLM budget to highest-priority theses
+- `services/autonomy_reporter.py` — writes a plain-English self-audit after each run
+
+### What "100% agentic" looks like now
+- The agent wakes up (scheduler)
+- Sets its own goals (`goal_planner`)
+- Identifies knowledge gaps (`active_researcher`)
+- Searches the web for answers (`web_searcher`)
+- Reasons about what it found (`reasoning_pipeline`)
+- Writes new rules based on what worked (`rule_learner`)
+- Executes safe actions automatically (`action_executor`)
+- Writes a memory of what it learned (`agent_memory`)
+- Generates a self-audit report (`autonomy_reporter`)
+- Goes back to sleep until next run
+- You just watch.
+
+### Verification
+- `python3 -m unittest discover -s tests -v` ✓ (`117` passing)
+- `python3 tests/smoke_test.py` ✓ (`62/62` routes passing)
+- latest verified live run: `run_id 701`
+- live run metrics:
+  - `active_research.searches_done=2`
+  - `active_research.articles_found=0`
+  - `active_research.needs_found=2`
+  - `rule_learning.new_rules=0`
+  - `actions_executed.auto=0`
+  - `actions_executed.manual=0`
+  - `autonomy_report_written=true`
+  - `reasoning_chains_built=18`
+  - `duration_seconds=405.397`
+- web search log now contains agent-initiated searches from run `701`
+- execution proof recorded with completed action `id 29` (`log_intelligence`)

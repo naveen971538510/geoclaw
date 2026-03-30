@@ -48,6 +48,19 @@ class TestQueryEngine(unittest.TestCase):
         result = self.engine.ask("show top thesis")
         self.assertIsInstance(result["answer"], str)
 
+    def test_answer_card_contains_direct_answer_and_points(self):
+        result = self.engine.ask("what is driving oil right now")
+        self.assertIn("answer_card", result)
+        self.assertTrue(result["answer_card"]["direct_answer"])
+        self.assertGreaterEqual(len(result["answer_card"]["supporting_points"]), 2)
+
+    def test_answer_remains_grounded_in_retrieved_data(self):
+        result = self.engine.ask("what is driving oil right now")
+        points = " ".join(result.get("grounding_points", [])).lower()
+        theses = " ".join(item.get("thesis_key", "") for item in result["data"].get("theses", [])).lower()
+        self.assertTrue(points)
+        self.assertTrue(any(term in points for term in theses.split()[:3] if term))
+
     def test_confidence_in_0_1_range(self):
         result = self.engine.ask("show top thesis")
         self.assertGreaterEqual(result["confidence"], 0.0)

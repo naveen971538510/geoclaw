@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -33,10 +34,10 @@ from services.decision_service import create_decision, decision_metrics, list_de
 from services.event_bus import publish
 from services.evaluation_service import evaluate_previous_items
 from services.goal_service import ensure_agent_tables, generate_autonomous_goals, get_conn, list_goals, utc_now_iso
-from services.llm_service import analyse_contradiction_meta, new_llm_run_state, summarize_llm_run_state
+from services.llm_service import analyse_contradiction_meta, new_llm_run_state, recent_usage_summary, summarize_llm_run_state
 from services.memory_service import latest_memory_for_article, outcome_summary, write_memory
 from services.presentation_service import get_terminal_payload_clean
-from services.reasoning_pipeline import process_unreasoned_articles
+from services.reasoning_pipeline import process_unreasoned_articles, process_web_sourced_articles
 from services.research_agent import research_thesis
 from services.reflection_service import run_reflection
 from services.db_helpers import get_conn as shared_get_conn
@@ -359,6 +360,19 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     starting_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     seen_action_ids = set(starting_action_ids)
     step_results = {}
+    run_goals = []
+    try:
+        from services.goal_planner import GoalPlanner
+
+        planner = GoalPlanner()
+        run_goals = planner.generate_run_goals(DB_PATH, real_agent_runs)
+        planner.log_goals(run_goals, DB_PATH, real_agent_runs)
+        logger.info("Run goals (%s): %s", len(run_goals), [goal.get("goal", "") for goal in run_goals])
+        step_results["run_goals"] = {"status": "ok", "count": len(run_goals)}
+    except Exception as exc:
+        logger.warning("Goal planning failed: %s", exc)
+        run_goals = []
+        step_results["run_goals"] = {"status": "error", "error": str(exc)}
     try:
         ingestion = run_agent_cycle(max_records_per_source=max_records_per_source)
         step_results["ingestion"] = {"status": "ok"}
@@ -366,8 +380,66 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         logger.error("Step ingestion failed: %s", exc, exc_info=True)
         ingestion = {}
         step_results["ingestion"] = {"status": "error", "error": str(exc)}
+    active_research_stats = {"searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_found": 0}
     try:
-        reasoning_pipeline_stats = process_unreasoned_articles(DB_PATH, max_articles=50)
+        from services.active_researcher import ActiveResearcher
+
+        researcher = ActiveResearcher(DB_PATH)
+        goal_items = [
+            {
+                "thesis_key": goal.get("thesis_key", ""),
+                "reason": goal.get("goal", ""),
+                "priority": goal.get("priority", 2),
+                "confidence": 0.5,
+            }
+            for goal in run_goals
+            if goal.get("thesis_key")
+        ]
+        residual_needs = [need for need in researcher.identify_research_needs() if str(need.get("thesis_key") or "") not in {str(item.get("thesis_key") or "") for item in goal_items}]
+        planned_needs = []
+        seen_research_keys = set()
+        for item in goal_items + residual_needs:
+            thesis_key = str(item.get("thesis_key") or "").strip()
+            if not thesis_key or thesis_key in seen_research_keys:
+                continue
+            seen_research_keys.add(thesis_key)
+            planned_needs.append(item)
+        planned_needs = planned_needs[: int(getattr(researcher, "MAX_SEARCHES_PER_RUN", 4) or 4)]
+        combined_stats = researcher.execute_research(planned_needs) if planned_needs else {"searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_processed": 0, "details": []}
+        active_research_stats = {
+            "searches_done": int(combined_stats.get("searches_done", 0) or 0),
+            "articles_found": int(combined_stats.get("articles_found", 0) or 0),
+            "articles_saved": int(combined_stats.get("articles_saved", 0) or 0),
+            "needs_processed": int(combined_stats.get("needs_processed", 0) or 0),
+            "needs_found": len(planned_needs),
+            "needs": planned_needs,
+            "details": list(combined_stats.get("details", []) or []),
+        }
+        logger.info("Active research: %s", active_research_stats)
+        step_results["active_research"] = {"status": "ok", "searches_done": int(active_research_stats.get("searches_done", 0) or 0)}
+    except Exception as exc:
+        logger.warning("Active research failed: %s", exc)
+        active_research_stats = {"error": str(exc), "searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_found": 0}
+        step_results["active_research"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.budget_manager import BudgetManager
+
+        llm_budget = int(os.environ.get("LLM_CALLS_PER_RUN", "5") or 5)
+        budget_allocation = BudgetManager().allocate_budget(DB_PATH, llm_budget)
+        ingestion_reasoning = process_unreasoned_articles(DB_PATH, max_articles=50, budget_allocation=dict(budget_allocation.get("allocation", {}) or {}))
+        web_reasoning = process_web_sourced_articles(DB_PATH, max_articles=20, budget_allocation=dict(budget_allocation.get("allocation", {}) or {}))
+        reasoning_pipeline_stats = {
+            "processed": int(ingestion_reasoning.get("processed", 0) or 0) + int(web_reasoning.get("processed", 0) or 0),
+            "theses_updated": int(ingestion_reasoning.get("theses_updated", 0) or 0) + int(web_reasoning.get("theses_updated", 0) or 0),
+            "chains_written": int(ingestion_reasoning.get("chains_written", 0) or 0) + int(web_reasoning.get("chains_written", 0) or 0),
+            "llm_used": int(ingestion_reasoning.get("llm_used", 0) or 0) + int(web_reasoning.get("llm_used", 0) or 0),
+            "rule_engine_used": int(ingestion_reasoning.get("rule_engine_used", 0) or 0) + int(web_reasoning.get("rule_engine_used", 0) or 0),
+            "predictions_recorded": int(ingestion_reasoning.get("predictions_recorded", 0) or 0) + int(web_reasoning.get("predictions_recorded", 0) or 0),
+            "ingested_articles": ingestion_reasoning,
+            "web_sourced_articles": web_reasoning,
+            "llm_observability": ingestion_reasoning.get("llm_observability") or web_reasoning.get("llm_observability") or {},
+            "budget_allocation": budget_allocation,
+        }
         step_results["reasoning"] = {"status": "ok"}
     except Exception as exc:
         logger.error("Step reasoning failed: %s", exc, exc_info=True)
@@ -413,11 +485,13 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     reflection_metrics = {}
     briefing_created = 0
     alerts_fired = 0
+    actions_executed = {"auto": 0, "manual": 0}
     decay_stats = {"decayed": 0, "superseded": 0}
     promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
     dedup_result = {"pairs_found": 0, "merged": 0, "superseded": [], "dry_run": False}
     sentiment_snapshot = {"score": 0.0, "label": "Neutral", "components": {}, "inputs": {}}
     anomalies = []
+    learn_stats = {"new_rules": 0, "updated_rules": 0, "retired_rules": 0, "analysed_predictions": 0, "candidates_considered": 0}
     cooldown_blocked_actions = 0
     goal_cap_blocks = 0
     research_cap_blocks = 0
@@ -696,6 +770,21 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     except Exception as exc:
         logger.error("Step actions failed: %s", exc, exc_info=True)
         step_results["actions"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.action_executor import ActionExecutor
+
+        executor = ActionExecutor(DB_PATH)
+        auto_result = executor.execute_auto_approved()
+        manual_result = executor.execute_manually_approved()
+        actions_executed = {
+            "auto": int(auto_result.get("auto_executed", 0) or 0),
+            "manual": int(manual_result.get("manually_executed", 0) or 0),
+        }
+        step_results["action_execution"] = {"status": "ok", **actions_executed}
+    except Exception as exc:
+        logger.warning("Action execution failed: %s", exc)
+        actions_executed = {"error": str(exc)}
+        step_results["action_execution"] = {"status": "error", "error": str(exc)}
 
     try:
         from services.alert_service import AlertService
@@ -778,6 +867,17 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     except Exception as exc:
         logger.warning("Anomaly detection failed: %s", exc)
         step_results["anomalies"] = {"status": "error", "error": str(exc)}
+    try:
+        from services.rule_learner import RuleLearner
+
+        learn_stats = RuleLearner(DB_PATH).write_learned_rules()
+        if int(learn_stats.get("new_rules", 0) or 0) > 0:
+            publish("rules_learned", learn_stats)
+        step_results["rule_learning"] = {"status": "ok", "new_rules": int(learn_stats.get("new_rules", 0) or 0)}
+    except Exception as exc:
+        logger.warning("Rule learning failed: %s", exc)
+        learn_stats = {"error": str(exc), "new_rules": 0, "updated_rules": 0, "retired_rules": 0, "analysed_predictions": 0, "candidates_considered": 0}
+        step_results["rule_learning"] = {"status": "error", "error": str(exc)}
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -788,25 +888,31 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     metrics = {
         "items_fetched": int(ingestion.get("items_fetched", 0) or 0),
         "items_kept": int(ingestion.get("items_kept", 0) or 0),
+        "run_goals": [goal.get("goal", "") for goal in run_goals],
         "alerts_created": max(int(ingestion.get("alerts_created", 0) or 0), int(surfaced_alerts or 0), int(decision_counts.get("alert", 0) or 0)),
         "decision_counts": dict(decision_counts),
         "evaluations": Counter(str(x.get("status", "") or "") for x in evaluations),
         "watchlist_hits": int((payload.get("stats", {}) or {}).get("watchlist_hits", 0) or 0),
         "llm_metrics": ingestion.get("llm_metrics", {}) or {},
         "contradiction_llm_metrics": summarize_llm_run_state(contradiction_llm_state),
+        "llm_usage_summary": recent_usage_summary(hours=6),
         "task_closures": closure_totals,
         "cluster_identities_seen": len(seen_identities),
         "action_proposals_created": action_proposals_created,
+        "actions_executed": actions_executed,
         "research_agent_runs": research_agent_runs,
+        "active_research": active_research_stats,
         "autonomous_goals_created": autonomous_goals_created,
         "alerts_fired": alerts_fired,
         "prices_captured": prices_captured,
         "prediction_checks": prediction_checks,
         "reasoning_chains_built": int(ingestion.get("reasoning_chains_built", 0) or 0) + int(reasoning_pipeline_stats.get("chains_written", 0) or 0),
         "reasoning_pipeline": reasoning_pipeline_stats,
+        "budget_allocation": reasoning_pipeline_stats.get("budget_allocation", {}),
         "reasoning_cap_blocks": reasoning_cap_blocks,
         "thesis_lifecycle": {**decay_stats, **promote_demote_stats},
         "deduplication": dedup_result,
+        "rule_learning": learn_stats,
         "reflection_summary": reflection_metrics,
         "briefing_created": briefing_created,
         "sentiment_index": float(sentiment_snapshot.get("score", 0.0) or 0.0),
@@ -835,10 +941,27 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
             "confidence_updates": thesis_confidence_updates,
             "touched": sorted([key for key in thesis_keys_touched if key])[:20],
         },
+        "autonomy_report_written": False,
     }
     latest_run_id = _latest_agent_run_id()
+    try:
+        from services.autonomy_reporter import AutonomyReporter
+
+        reporter = AutonomyReporter()
+        report = reporter.generate_run_report(DB_PATH, latest_run_id or real_agent_runs, metrics)
+        reporter.save_report(DB_PATH, latest_run_id or real_agent_runs, report)
+        metrics["autonomy_report_written"] = True
+        logger.info("Autonomy report written")
+    except Exception as exc:
+        logger.warning("Autonomy report failed: %s", exc)
     _journal(latest_run_id, "agent_loop", "Observed latest payload, wrote decisions/tasks, and re-checked prior thesis items.", metrics)
     publish("agent_run_complete", {"run_id": latest_run_id or real_agent_runs, "metrics": metrics})
+    try:
+        from services.agent_memory import AgentMemory
+
+        AgentMemory(DB_PATH).record_run_lessons(metrics, run_id=latest_run_id or real_agent_runs)
+    except Exception as exc:
+        logger.warning("Memory recording failed: %s", exc)
 
     return {
         "status": "ok",

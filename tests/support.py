@@ -43,9 +43,12 @@ def bootstrap_test_db(db_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             headline TEXT,
             source_name TEXT,
+            source TEXT,
             summary TEXT DEFAULT '',
             published_at TEXT DEFAULT '',
             fetched_at TEXT DEFAULT '',
+            sentiment_label TEXT DEFAULT '',
+            relevance_score REAL DEFAULT 0.0,
             url TEXT DEFAULT ''
         )
         """
@@ -57,7 +60,15 @@ def bootstrap_test_db(db_path):
             action_type TEXT,
             thesis_key TEXT,
             status TEXT DEFAULT 'pending',
+            approval_state TEXT DEFAULT 'pending',
+            reason TEXT DEFAULT '',
+            metadata TEXT DEFAULT '{}',
+            confidence REAL DEFAULT 0.0,
+            evidence_count INTEGER DEFAULT 0,
+            triggered_by TEXT DEFAULT 'test',
             created_at TEXT DEFAULT '',
+            reviewed_at TEXT DEFAULT '',
+            executed_at TEXT DEFAULT '',
             payload_json TEXT DEFAULT '',
             audit_note TEXT DEFAULT ''
         )
@@ -83,6 +94,7 @@ def bootstrap_test_db(db_path):
             journal_type TEXT DEFAULT 'agent_loop',
             summary TEXT DEFAULT '',
             metrics_json TEXT DEFAULT '{}',
+            metrics TEXT DEFAULT '{}',
             created_at TEXT DEFAULT ''
         )
         """
@@ -97,7 +109,8 @@ def bootstrap_test_db(db_path):
             contradiction_count INTEGER DEFAULT 0,
             chain_count INTEGER DEFAULT 0,
             action_count INTEGER DEFAULT 0,
-            run_id INTEGER DEFAULT 0
+            run_id INTEGER DEFAULT 0,
+            format TEXT DEFAULT 'trader'
         )
         """
     )
@@ -141,7 +154,11 @@ def bootstrap_test_db(db_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             thesis_key TEXT,
             article_id INTEGER DEFAULT 0,
-            chain_text TEXT DEFAULT ''
+            chain_text TEXT DEFAULT '',
+            chain_json TEXT DEFAULT '[]',
+            terminal_risk TEXT DEFAULT '',
+            watchlist_suggestion TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
         )
         """
     )
@@ -153,6 +170,107 @@ def bootstrap_test_db(db_path):
             label TEXT,
             components TEXT,
             recorded_at TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_search_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT,
+            result_count INTEGER DEFAULT 0,
+            searched_at TEXT DEFAULT '',
+            triggered_by TEXT DEFAULT 'agent',
+            thesis_key TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_sourced_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            headline TEXT,
+            url TEXT UNIQUE,
+            body TEXT,
+            source TEXT,
+            search_query TEXT,
+            published_at TEXT,
+            fetched_at TEXT DEFAULT '',
+            is_reasoned INTEGER DEFAULT 0,
+            thesis_key TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS learned_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            confidence_delta REAL NOT NULL,
+            timeframe TEXT DEFAULT 'days',
+            mechanism TEXT,
+            market_implication TEXT,
+            discovered_from TEXT,
+            verification_count INTEGER DEFAULT 0,
+            accuracy_pct REAL DEFAULT 0.0,
+            created_at TEXT DEFAULT '',
+            last_used TEXT DEFAULT '',
+            last_verified TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            source TEXT DEFAULT 'learned'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_reliability (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT UNIQUE,
+            total_predictions INTEGER DEFAULT 0,
+            verified_predictions INTEGER DEFAULT 0,
+            refuted_predictions INTEGER DEFAULT 0,
+            reliability_score REAL DEFAULT 0.65,
+            last_updated TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            asset_type TEXT DEFAULT '',
+            thesis_key TEXT DEFAULT '',
+            reason TEXT DEFAULT '',
+            direction TEXT DEFAULT '',
+            added_at TEXT DEFAULT '',
+            status TEXT DEFAULT 'active'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alert_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT DEFAULT '',
+            alert_type TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_type TEXT,
+            subject TEXT DEFAULT '',
+            content TEXT DEFAULT '',
+            importance REAL DEFAULT 0.5,
+            created_at TEXT DEFAULT '',
+            last_recalled TEXT DEFAULT '',
+            recall_count INTEGER DEFAULT 0,
+            expired INTEGER DEFAULT 0,
+            run_id INTEGER DEFAULT 0
         )
         """
     )
@@ -265,10 +383,23 @@ def seed_sample_data(db_path):
     conn.executemany(
         """
         INSERT INTO ingested_articles (
-            headline, source_name, summary, published_at, fetched_at, url
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            headline, source_name, source, summary, published_at, fetched_at, sentiment_label, relevance_score, url
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        articles,
+        [
+            (
+                headline,
+                source_name,
+                source_name,
+                summary,
+                published_at,
+                fetched_at,
+                "negative" if "Iran" in headline or "tariffs" in headline else "positive",
+                0.82 if "Iran" in headline else 0.74,
+                url,
+            )
+            for headline, source_name, summary, published_at, fetched_at, url in articles
+        ],
     )
 
     enrichments = [
@@ -286,14 +417,46 @@ def seed_sample_data(db_path):
     )
 
     actions = [
-        ("hedge", "Iran tensions affect Strait of Hormuz oil flow", "pending", iso_now(-1), '{"asset":"CL=F"}', "HIGH risk oil hedge proposal"),
-        ("monitor", "China tariffs pressure semiconductor supply chains", "proposed", iso_now(-2), '{"asset":"QQQ"}', "Watch tariff headlines"),
+        (
+            "hedge",
+            "Iran tensions affect Strait of Hormuz oil flow",
+            "pending",
+            "pending",
+            "HIGH risk oil hedge proposal",
+            '{"asset":"CL=F"}',
+            0.93,
+            5,
+            "test",
+            iso_now(-1),
+            "",
+            "",
+            '{"asset":"CL=F"}',
+            "HIGH risk oil hedge proposal",
+        ),
+        (
+            "monitor",
+            "China tariffs pressure semiconductor supply chains",
+            "draft",
+            "draft",
+            "Watch tariff headlines",
+            '{"asset":"QQQ"}',
+            0.66,
+            3,
+            "test",
+            iso_now(-2),
+            "",
+            "",
+            '{"asset":"QQQ"}',
+            "Watch tariff headlines",
+        ),
     ]
     conn.executemany(
         """
         INSERT INTO agent_actions (
-            action_type, thesis_key, status, created_at, payload_json, audit_note
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            action_type, thesis_key, status, approval_state, reason, metadata,
+            confidence, evidence_count, triggered_by, created_at,
+            reviewed_at, executed_at, payload_json, audit_note
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         actions,
     )
@@ -314,16 +477,23 @@ def seed_sample_data(db_path):
     conn.execute(
         """
         INSERT INTO agent_journal (
-            run_id, journal_type, summary, metrics_json, created_at
-        ) VALUES (?, ?, ?, ?, ?)
+            run_id, journal_type, summary, metrics_json, metrics, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (101, "agent_loop", "Baseline test journal entry", '{"chains":8}', iso_now(-1)),
+        (
+            101,
+            "agent_loop",
+            "Baseline test journal entry",
+            '{"chains":8,"run_goals":["Verify Hormuz thesis"],"active_research":{"searches_done":1,"articles_found":2,"articles_saved":1,"needs_found":1},"rule_learning":{"new_rules":0,"updated_rules":0},"actions_executed":{"auto":0,"manual":0},"autonomy_report_written":true}',
+            '{"chains":8,"run_goals":["Verify Hormuz thesis"],"active_research":{"searches_done":1,"articles_found":2,"articles_saved":1,"needs_found":1},"rule_learning":{"new_rules":0,"updated_rules":0},"actions_executed":{"auto":0,"manual":0},"autonomy_report_written":true}',
+            iso_now(-1),
+        ),
     )
     conn.execute(
         """
         INSERT INTO agent_briefings (
-            briefing_text, generated_at, thesis_count, contradiction_count, chain_count, action_count, run_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            briefing_text, generated_at, thesis_count, contradiction_count, chain_count, action_count, run_id, format
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "GeoClaw briefing text for test export and CLI coverage.",
@@ -333,15 +503,50 @@ def seed_sample_data(db_path):
             8,
             2,
             101,
+            "trader",
         ),
     )
     conn.execute(
         """
         INSERT INTO reasoning_chains (
-            thesis_key, article_id, chain_text
-        ) VALUES (?, ?, ?)
+            thesis_key, article_id, chain_text, chain_json, terminal_risk, watchlist_suggestion, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        ("Iran tensions affect Strait of Hormuz oil flow", 1, "Article links to energy risk thesis."),
+        (
+            "Iran tensions affect Strait of Hormuz oil flow",
+            1,
+            "Article links to energy risk thesis.",
+            '[{"hop":1,"from":"headline","to":"oil","mechanism":"shipping risk","confidence":0.7,"timeframe":"days"}]',
+            "Watch oil volatility",
+            "CL=F",
+            iso_now(-1),
+        ),
+    )
+    conn.executemany(
+        """
+        INSERT INTO source_reliability (
+            source_name, total_predictions, verified_predictions, refuted_predictions, reliability_score, last_updated
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("Reuters", 10, 8, 2, 0.88, iso_now(-1)),
+            ("Bloomberg", 8, 6, 2, 0.84, iso_now(-1)),
+            ("FT", 6, 4, 2, 0.79, iso_now(-1)),
+        ],
+    )
+    conn.execute(
+        """
+        INSERT INTO alert_events (title, alert_type, created_at)
+        VALUES (?, ?, ?)
+        """,
+        ("Oil risk premium widening", "market_alert", iso_now(-1)),
+    )
+    conn.execute(
+        """
+        INSERT INTO agent_memory (memory_type, subject, content, importance, created_at, run_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("pattern", "Iran tensions affect Strait of Hormuz oil flow", '{"confidence": 0.93, "status": "confirmed"}', 0.9, iso_now(-1), 101),
     )
     conn.commit()
     conn.close()

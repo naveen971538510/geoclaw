@@ -1,4 +1,9 @@
+import logging
+import time
 from typing import Dict, List, Tuple
+
+
+logger = logging.getLogger("geoclaw.rule_engine")
 
 
 RULES = [
@@ -56,6 +61,27 @@ GEO_MAP = {
 
 
 class RuleEngine:
+    def __init__(self):
+        self._db_path = None
+        self._learned_rules = []
+        self._learned_rules_loaded_at = 0.0
+
+    def load_learned_rules(self, db_path: str):
+        if not db_path:
+            return
+        if self._learned_rules and (time.time() - float(self._learned_rules_loaded_at or 0.0)) < 300:
+            return
+        try:
+            from services.rule_learner import RuleLearner
+
+            self._learned_rules = RuleLearner(db_path).get_active_learned_rules()
+            self._learned_rules_loaded_at = time.time()
+            if self._learned_rules:
+                logger.info("Rule engine loaded %s learned rules", len(self._learned_rules))
+        except Exception as exc:
+            logger.warning("Could not load learned rules: %s", exc)
+            self._learned_rules = []
+
     def _text(self, article: Dict) -> str:
         headline = str(article.get("headline") or "").strip()
         body = str(article.get("body") or article.get("summary") or "").strip()
@@ -87,6 +113,8 @@ class RuleEngine:
 
     def reason(self, article: Dict) -> Tuple[float, List[Dict]]:
         text = self._text(article)
+        if self._db_path:
+            self.load_learned_rules(self._db_path)
         matched_rules = []
         for kw, delta, timeframe, mechanism, implication in RULES:
             if kw in text:
@@ -155,6 +183,24 @@ class RuleEngine:
                         "timeframe": timeframe,
                     }
                 )
+
+        for learned in self._learned_rules[:8]:
+            keyword = str(learned.get("keyword") or "").strip().lower()
+            if not keyword or keyword not in text:
+                continue
+            learned_delta = float(learned.get("confidence_delta", 0.03) or 0.03)
+            total_delta += learned_delta
+            chain.append(
+                {
+                    "hop": len(chain) + 1,
+                    "from": "learned pattern",
+                    "to": keyword + " signal",
+                    "mechanism": str(learned.get("mechanism") or "Learned from prediction history"),
+                    "confidence": round(0.5 + abs(learned_delta), 2),
+                    "timeframe": str(learned.get("timeframe") or "days"),
+                    "rule_source": "learned",
+                }
+            )
 
         if len(chain) < 2:
             kw, delta, timeframe, mechanism, implication = matched_rules[0]

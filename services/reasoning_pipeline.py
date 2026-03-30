@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, List
 
 from config import DB_PATH
 from services.db_helpers import get_conn
@@ -61,73 +61,138 @@ def _record_event(cur, thesis_key: str, event_type: str, note: str, confidence: 
     )
 
 
-def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
-    conn = get_conn(db_path or DB_PATH)
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(ingested_articles)")
-    article_columns = {row["name"] if isinstance(row, dict) else row[1] for row in cur.fetchall()}
-    if "is_reasoned" not in article_columns:
-        cur.execute("ALTER TABLE ingested_articles ADD COLUMN is_reasoned INTEGER DEFAULT 0")
-        conn.commit()
-
-    articles = cur.execute(
-        """
-        SELECT
-            ia.id,
-            ia.headline,
-            ia.summary,
-            ia.source_name,
-            ia.url,
-            ia.published_at,
-            ia.fetched_at,
-            ae.thesis,
-            ae.cluster_key
-        FROM ingested_articles ia
-        LEFT JOIN article_enrichment ae
-          ON ae.article_id = ia.id
-        WHERE COALESCE(ia.is_reasoned, 0) = 0
-        ORDER BY COALESCE(ia.published_at, ia.fetched_at, '') DESC, ia.id DESC
-        LIMIT ?
-        """,
-        (int(max_articles),),
-    ).fetchall()
-
-    engine = RuleEngine()
-    llm = LLMAnalyst(db_path or DB_PATH)
-    llm.reset_run_counter()
-    stats = {"processed": 0, "theses_updated": 0, "chains_written": 0, "llm_used": 0, "rule_engine_used": 0}
-
-    for article in articles:
-        item = dict(article)
-        article_view = {
-            "id": item.get("id"),
-            "headline": item.get("headline") or "",
-            "body": item.get("summary") or "",
-            "summary": item.get("summary") or "",
-            "source": item.get("source_name") or "unknown",
-            "source_name": item.get("source_name") or "unknown",
-            "published_at": item.get("published_at") or item.get("fetched_at") or "",
-            "url": item.get("url") or "",
-        }
-
-        existing = cur.execute(
+def _recent_confidence_history(cur, thesis_key: str, limit: int = 5):
+    try:
+        rows = cur.execute(
             """
-            SELECT confidence, evidence_count, confidence_velocity
+            SELECT confidence
+            FROM thesis_confidence_log
+            WHERE thesis_key = ?
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT ?
+            """,
+            (normalize_thesis_key(thesis_key), int(limit)),
+        ).fetchall()
+        return [round(float(row["confidence"] or 0.0) * 100) for row in rows]
+    except Exception:
+        return []
+
+
+def _linked_recent_headlines(cur, thesis_key: str, limit: int = 3):
+    try:
+        rows = cur.execute(
+            """
+            SELECT ia.headline
+            FROM reasoning_chains rc
+            JOIN ingested_articles ia ON ia.id = rc.article_id
+            WHERE rc.thesis_key = ?
+            ORDER BY rc.created_at DESC, rc.id DESC
+            LIMIT ?
+            """,
+            (normalize_thesis_key(thesis_key), int(limit)),
+        ).fetchall()
+        return [str(row["headline"] or "").strip() for row in rows if str(row["headline"] or "").strip()]
+    except Exception:
+        return []
+
+
+def _fetch_prediction_accuracy(db_path: str) -> Dict:
+    try:
+        return PredictionTracker(db_path).get_accuracy_report()
+    except Exception:
+        return {"accuracy_pct": 0}
+
+
+def _fetch_existing_thesis(cur, primary_key: str, hint_key: str = ""):
+    for thesis_key in [normalize_thesis_key(primary_key), normalize_thesis_key(hint_key)]:
+        if not thesis_key:
+            continue
+        row = cur.execute(
+            """
+            SELECT thesis_key, confidence, evidence_count, confidence_velocity, contradiction_count, title, current_claim
             FROM agent_theses
             WHERE thesis_key = ?
             LIMIT 1
             """,
-            (normalize_thesis_key(engine.derive_thesis_key(article_view)),),
+            (thesis_key,),
         ).fetchone()
-        existing_row = dict(existing) if existing else None
+        if row:
+            return dict(row)
+    return None
 
-        llm_result = llm.analyse_article(
-            article_view["headline"],
-            article_view.get("body", "") or "",
-            existing_thesis=existing_row,
-        )
+
+def _build_article_view(item: Dict, source_table: str) -> Dict:
+    source_name = item.get("source_name") or item.get("source") or "unknown"
+    body = item.get("summary") if source_table == "ingested_articles" else item.get("body")
+    return {
+        "id": item.get("id"),
+        "headline": item.get("headline") or "",
+        "body": body or "",
+        "summary": body or "",
+        "source": source_name,
+        "source_name": source_name,
+        "published_at": item.get("published_at") or item.get("fetched_at") or "",
+        "url": item.get("url") or "",
+    }
+
+
+def _get_source_weight(db_path: str, source_name: str) -> float:
+    try:
+        from services.source_learner import SourceLearner
+
+        return float(SourceLearner(db_path).get_weight(source_name))
+    except Exception:
+        return float(get_source_weight(source_name))
+
+
+def _process_rows(
+    conn,
+    cur,
+    rows: List[Dict],
+    source_table: str,
+    db_path: str,
+    llm: LLMAnalyst,
+    stats: Dict,
+    prediction_accuracy: Dict,
+    budget_allocation: Dict = None,
+):
+    engine = RuleEngine()
+    engine._db_path = db_path
+    engine.load_learned_rules(db_path)
+    for article in rows:
+        item = dict(article)
+        article_view = _build_article_view(item, source_table)
+        derived_key = normalize_thesis_key(engine.derive_thesis_key(article_view))
+        hinted_key = normalize_thesis_key(item.get("thesis_key") or "")
+        existing_row = _fetch_existing_thesis(cur, derived_key, hinted_key)
+        now = _utc_now_iso()
+        source_weight = _get_source_weight(db_path, str(article_view.get("source_name") or ""))
+        recency_weight = _recency_weight(article_view.get("published_at") or "")
+        llm_context = dict(existing_row or {})
+        llm_context["source_reliability"] = round(float(source_weight or 0.65), 3)
+        llm_context["prediction_accuracy"] = float(prediction_accuracy.get("accuracy_pct", 0.0) or 0.0)
+        if hinted_key:
+            llm_context["thesis_hint"] = hinted_key
+        if existing_row:
+            thesis_ref = llm_context.get("thesis_key") or derived_key or hinted_key
+            llm_context["history"] = _recent_confidence_history(cur, thesis_ref)
+            llm_context["recent_articles"] = _linked_recent_headlines(cur, thesis_ref)
+
+        budget_key = normalize_thesis_key((existing_row or {}).get("thesis_key") or hinted_key or derived_key)
+        use_llm = bool(llm and llm.available())
+        if budget_allocation is not None:
+            use_llm = use_llm and int((budget_allocation or {}).get(budget_key, 0) or 0) > 0
+        if use_llm and budget_allocation is not None and budget_key:
+            budget_allocation[budget_key] = max(0, int(budget_allocation.get(budget_key, 0) or 0) - 1)
+        llm_result = None
+        if use_llm:
+            llm_result = llm.analyse_article(
+                article_view["headline"],
+                article_view.get("body", "") or "",
+                existing_thesis=llm_context,
+            )
         if llm_result:
-            thesis_key = normalize_thesis_key(llm_result.get("thesis_key") or engine.derive_thesis_key(article_view))
+            thesis_key = normalize_thesis_key(llm_result.get("thesis_key") or derived_key or hinted_key)
             delta = float(llm_result.get("confidence_delta", 0.0) or 0.0)
             timeframe = str(llm_result.get("timeframe", "days") or "days")
             terminal_risk = str(llm_result.get("terminal_risk", "LOW") or "LOW")
@@ -151,26 +216,18 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
                 },
             ]
             reasoning_source = "llm"
-            reason = str(llm_result.get("reasoning", "") or "llm analysis")
+            reason = str(llm_result.get("why_now") or llm_result.get("reasoning") or "llm analysis")
             stats["llm_used"] += 1
         else:
-            thesis_key = normalize_thesis_key(engine.derive_thesis_key(article_view))
+            thesis_key = normalize_thesis_key(derived_key or hinted_key)
             delta, chain = engine.reason(article_view)
             timeframe = str((chain[0] or {}).get("timeframe") if chain else "days")
             terminal_risk = engine.compute_terminal_risk(thesis_key, 0.5 + float(delta or 0.0), timeframe=timeframe)
-            watchlist_suggestion = engine.compute_watchlist_suggestion(thesis_key)
+            watchlist_suggestion = engine.compute_watchlist_suggestion(thesis_key or hinted_key)
             reasoning_source = "rule_engine"
             reason = str((chain[0] or {}).get("mechanism") if chain else "rule match")
             stats["rule_engine_used"] += 1
 
-        now = _utc_now_iso()
-        try:
-            from services.source_learner import SourceLearner
-
-            source_weight = SourceLearner(db_path or DB_PATH).get_weight(item.get("source_name", ""))
-        except Exception:
-            source_weight = get_source_weight(item.get("source_name", ""))
-        recency_weight = _recency_weight(item.get("published_at") or item.get("fetched_at") or "")
         if existing_row:
             old_conf = float(existing_row.get("confidence", 0.5) or 0.5)
             evidence_count = int(existing_row.get("evidence_count", 0) or 0)
@@ -207,11 +264,10 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
                 ),
             )
             _record_event(cur, thesis_key, "strengthened" if new_conf >= old_conf else "weakened", reason, new_conf, evidence_count + 1)
-            logger.info("Thesis %s: delta=%.3f adjusted=%.3f new_conf=%.3f", thesis_key, float(delta or 0.0), adjusted_delta, new_conf)
+            logger.info("Thesis %s (%s): delta=%.3f adjusted=%.3f new_conf=%.3f", thesis_key, source_table, float(delta or 0.0), adjusted_delta, new_conf)
         else:
             old_conf = 0.5
-            evidence_weight = 1.0
-            adjusted_delta = float(delta or 0.0) * float(source_weight or 0.65) * float(recency_weight or 0.5) * evidence_weight
+            adjusted_delta = float(delta or 0.0) * float(source_weight or 0.65) * float(recency_weight or 0.5)
             initial_conf = _clamp_confidence(old_conf + adjusted_delta)
             emitted_confidence = initial_conf
             new_velocity = 0.3 * (initial_conf - old_conf)
@@ -254,21 +310,22 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
                 ),
             )
             _record_event(cur, thesis_key, "created", reason, initial_conf, 1)
-            logger.info("Thesis %s: delta=%.3f adjusted=%.3f new_conf=%.3f", thesis_key, float(delta or 0.0), adjusted_delta, initial_conf)
-        stats["theses_updated"] += 1
+            logger.info("Thesis %s (%s): delta=%.3f adjusted=%.3f new_conf=%.3f", thesis_key, source_table, float(delta or 0.0), adjusted_delta, initial_conf)
 
-        cur.execute(
-            """
-            UPDATE article_enrichment
-            SET thesis = ?,
-                what_to_watch = CASE
-                    WHEN COALESCE(TRIM(what_to_watch), '') = '' THEN ?
-                    ELSE what_to_watch
-                END
-            WHERE article_id = ?
-            """,
-            (thesis_key, watchlist_suggestion, int(item["id"])),
-        )
+        stats["theses_updated"] += 1
+        if source_table == "ingested_articles":
+            cur.execute(
+                """
+                UPDATE article_enrichment
+                SET thesis = ?,
+                    what_to_watch = CASE
+                        WHEN COALESCE(TRIM(what_to_watch), '') = '' THEN ?
+                        ELSE what_to_watch
+                    END
+                WHERE article_id = ?
+                """,
+                (thesis_key, watchlist_suggestion, int(item["id"])),
+            )
         cur.execute(
             """
             INSERT INTO reasoning_chains (
@@ -314,23 +371,85 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
             },
         )
         try:
-            pred_id = PredictionTracker(db_path or DB_PATH).record_prediction(thesis_key, float(emitted_confidence or current_confidence or 0.0), run_id=0)
+            pred_id = PredictionTracker(db_path).record_prediction(thesis_key, float(emitted_confidence or current_confidence or 0.0), run_id=0)
             if pred_id:
                 stats["predictions_recorded"] = int(stats.get("predictions_recorded", 0) or 0) + 1
         except Exception as exc:
             logger.warning("Prediction recording failed: %s", exc)
-        stats["chains_written"] += 1
 
-        cur.execute(
-            """
-            UPDATE ingested_articles
-            SET is_reasoned = 1
-            WHERE id = ?
-            """,
-            (int(item["id"]),),
-        )
+        stats["chains_written"] += 1
+        cur.execute(f"UPDATE {source_table} SET is_reasoned = 1 WHERE id = ?", (int(item["id"]),))
         stats["processed"] += 1
 
+
+def process_unreasoned_articles(db_path=None, max_articles: int = 50, budget_allocation: Dict = None) -> Dict:
+    db_path = db_path or DB_PATH
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(ingested_articles)")
+    article_columns = {row["name"] if isinstance(row, dict) else row[1] for row in cur.fetchall()}
+    if "is_reasoned" not in article_columns:
+        cur.execute("ALTER TABLE ingested_articles ADD COLUMN is_reasoned INTEGER DEFAULT 0")
+        conn.commit()
+    rows = cur.execute(
+        """
+        SELECT
+            ia.id,
+            ia.headline,
+            ia.summary,
+            ia.source_name,
+            ia.url,
+            ia.published_at,
+            ia.fetched_at,
+            ae.thesis,
+            ae.cluster_key
+        FROM ingested_articles ia
+        LEFT JOIN article_enrichment ae
+          ON ae.article_id = ia.id
+        WHERE COALESCE(ia.is_reasoned, 0) = 0
+        ORDER BY COALESCE(ia.published_at, ia.fetched_at, '') DESC, ia.id DESC
+        LIMIT ?
+        """,
+        (int(max_articles),),
+    ).fetchall()
+    llm = LLMAnalyst(db_path)
+    llm.reset_run_counter()
+    stats = {"processed": 0, "theses_updated": 0, "chains_written": 0, "llm_used": 0, "rule_engine_used": 0}
+    _process_rows(conn, cur, rows, "ingested_articles", db_path, llm, stats, _fetch_prediction_accuracy(db_path), budget_allocation=budget_allocation)
     conn.commit()
     conn.close()
+    stats["llm_observability"] = llm.recent_summary()
+    return stats
+
+
+def process_web_sourced_articles(db_path=None, max_articles: int = 20, budget_allocation: Dict = None) -> Dict:
+    db_path = db_path or DB_PATH
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT
+            id,
+            headline,
+            body,
+            source,
+            url,
+            published_at,
+            fetched_at,
+            thesis_key,
+            search_query
+        FROM web_sourced_articles
+        WHERE COALESCE(is_reasoned, 0) = 0
+        ORDER BY COALESCE(published_at, fetched_at, '') DESC, id DESC
+        LIMIT ?
+        """,
+        (int(max_articles),),
+    ).fetchall()
+    llm = LLMAnalyst(db_path)
+    llm.reset_run_counter()
+    stats = {"processed": 0, "theses_updated": 0, "chains_written": 0, "llm_used": 0, "rule_engine_used": 0}
+    _process_rows(conn, cur, rows, "web_sourced_articles", db_path, llm, stats, _fetch_prediction_accuracy(db_path), budget_allocation=budget_allocation)
+    conn.commit()
+    conn.close()
+    stats["llm_observability"] = llm.recent_summary()
     return stats

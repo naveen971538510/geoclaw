@@ -825,13 +825,21 @@ def agent_actions_preview(action_id: int):
 async def agent_actions_approve(action_id: int, request: Request):
     try:
         _mutation_guard(request)
-        from services.action_service import approve_action
+        from services.action_executor import ActionExecutor
+        from services.action_service import approve_action, list_actions
 
         payload = await request.json() if request else {}
         item = approve_action(action_id, payload.get("approved_by", "terminal"))
         if not item:
             return JSONResponse({"status": "error", "route": "/agent-actions/approve", "error": "not found"}, status_code=404)
-        return JSONResponse({"status": "ok", "item": item})
+        execution = None
+        try:
+            action = next((entry for entry in list_actions(limit=200) if int(entry.get("id", 0) or 0) == int(action_id)), item)
+            execution = ActionExecutor(str(DB_PATH)).execute_action(action)
+            item = next((entry for entry in list_actions(limit=200) if int(entry.get("id", 0) or 0) == int(action_id)), action)
+        except Exception:
+            pass
+        return JSONResponse({"status": "ok", "item": item, "execution": execution})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/agent-actions/approve", "error": str(exc)}, status_code=500)
 
@@ -1632,6 +1640,81 @@ def api_search(q: str = "", type: str = "all"):
         return JSONResponse({"status": "error", "route": "/api/search", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/research/needs", response_class=JSONResponse)
+def api_research_needs():
+    try:
+        from services.active_researcher import ActiveResearcher
+
+        needs = ActiveResearcher(str(DB_PATH)).identify_research_needs()
+        return JSONResponse({"status": "ok", "needs": needs, "count": len(needs)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/research/needs", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/research/run", response_class=JSONResponse)
+async def api_research_run(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.active_researcher import ActiveResearcher
+
+        result = ActiveResearcher(str(DB_PATH)).run_full_research_cycle()
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/research/run", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/research/log", response_class=JSONResponse)
+def api_research_log():
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT query, result_count, searched_at, triggered_by, thesis_key
+            FROM web_search_log
+            ORDER BY searched_at DESC, id DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        conn.close()
+        return JSONResponse({"status": "ok", "searches": [dict(row) for row in rows]})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/research/log", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/research/articles", response_class=JSONResponse)
+def api_research_articles():
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT headline, source, thesis_key, is_reasoned, fetched_at, search_query, url
+            FROM web_sourced_articles
+            ORDER BY fetched_at DESC, id DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        conn.close()
+        return JSONResponse({"status": "ok", "articles": [dict(row) for row in rows]})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/research/articles", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/dashboard/decision-view", response_class=JSONResponse)
+def api_dashboard_decision_view():
+    try:
+        from services.dashboard_service import build_dashboard_decision_view
+
+        return JSONResponse({"status": "ok", **build_dashboard_decision_view(str(DB_PATH))})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/dashboard/decision-view", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/ask", response_class=JSONResponse)
 def api_ask(q: str = ""):
     try:
@@ -1768,6 +1851,48 @@ def api_predictions_accuracy():
         return JSONResponse({"status": "ok", "report": report})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/predictions/accuracy", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/actions/execution-log", response_class=JSONResponse)
+def api_actions_execution_log():
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, action_type, status, metadata, thesis_key, created_at, approval_state, reason
+            FROM agent_actions
+            WHERE status IN ('completed', 'failed')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        conn.close()
+        items = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except Exception:
+                item["metadata"] = {}
+            items.append(item)
+        return JSONResponse({"status": "ok", "executions": items})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/actions/execution-log", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/actions/execute-all-safe", response_class=JSONResponse)
+async def api_actions_execute_all_safe(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.action_executor import ActionExecutor
+
+        result = ActionExecutor(str(DB_PATH)).execute_auto_approved()
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/actions/execute-all-safe", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/agent/status", response_class=JSONResponse)
@@ -1988,6 +2113,77 @@ def api_intelligence_merge_duplicates(request: Request):
         return JSONResponse({"status": "ok", "result": result})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/intelligence/merge-duplicates", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/rules/learned", response_class=JSONResponse)
+def api_rules_learned():
+    try:
+        from services.rule_learner import RuleLearner
+
+        rules = RuleLearner(str(DB_PATH)).get_active_learned_rules()
+        return JSONResponse({"status": "ok", "rules": rules, "count": len(rules)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/rules/learned", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/rules/all", response_class=JSONResponse)
+def api_rules_all():
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM learned_rules ORDER BY accuracy_pct DESC, verification_count DESC, id DESC").fetchall()
+        conn.close()
+        return JSONResponse({"status": "ok", "rules": [dict(row) for row in rows]})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/rules/all", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/rules/learn-now", response_class=JSONResponse)
+async def api_rules_learn_now(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.rule_learner import RuleLearner
+
+        result = RuleLearner(str(DB_PATH)).write_learned_rules()
+        return JSONResponse({"status": "ok", "result": result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/rules/learn-now", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/memory", response_class=JSONResponse)
+def api_memory(type: str = "all", subject: str = ""):
+    try:
+        from services.agent_memory import AgentMemory
+
+        memories = AgentMemory(str(DB_PATH)).recall(memory_type=type, subject=subject, limit=20)
+        return JSONResponse({"status": "ok", "memories": memories})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/memory", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/memory/context/{thesis_key:path}", response_class=JSONResponse)
+def api_memory_context(thesis_key: str):
+    try:
+        from services.agent_memory import AgentMemory
+
+        context = AgentMemory(str(DB_PATH)).get_context_for_thesis(thesis_key)
+        return JSONResponse({"status": "ok", "context": context})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/memory/context", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/goals/current", response_class=JSONResponse)
+def api_goals_current():
+    try:
+        from services.agent_loop_service import list_journal
+
+        latest = (list_journal(limit=1) or [{}])[0]
+        metrics = latest.get("metrics", {}) or {}
+        return JSONResponse({"status": "ok", "goals": list(metrics.get("run_goals", []) or []), "run_id": latest.get("run_id", 0) or 0})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/goals/current", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/sources/reliability", response_class=JSONResponse)

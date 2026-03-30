@@ -187,6 +187,35 @@ function thesisVelocityArrow(value){
   if (velocity < -0.02) return '<span style="color:#f85149">↓</span>';
   return '<span style="color:#8b949e">→</span>';
 }
+function actionExecutionMeta(action){
+  if (action && action.metadata && typeof action.metadata === 'object') return action.metadata;
+  if (!action || !action.metadata) return {};
+  try { return JSON.parse(action.metadata); } catch (err) { return {}; }
+}
+function actionExecutionLabel(action){
+  const status = String((action || {}).status || 'pending').toLowerCase();
+  const meta = actionExecutionMeta(action);
+  if (status === 'completed') return {icon:'✓', text:'Executed', color:'#3fb950', detail: meta.error ? String(meta.error) : ''};
+  if (status === 'failed') return {icon:'✗', text:'Failed', color:'#f85149', detail: String(meta.error || '')};
+  if (status === 'cancelled') return {icon:'○', text:'Cancelled', color:'#8b949e', detail:''};
+  if (status === 'approved' || status === 'auto_approved') return {icon:'○', text:'Awaiting execution', color:'#8b949e', detail:''};
+  if (status === 'proposed' || status === 'draft' || status === 'pending') return {icon:'○', text:'Awaiting execution', color:'#8b949e', detail:''};
+  if (status === 'rejected') return {icon:'○', text:'Rejected', color:'#d39a33', detail:''};
+  return {icon:'○', text:status || 'Awaiting execution', color:'#8b949e', detail:''};
+}
+function actionExecutionSummary(action){
+  const meta = actionExecutionMeta(action);
+  if (meta.added) return 'Added ' + String(meta.added);
+  if (meta.sent != null) return meta.sent ? 'Sent successfully' : ('Not sent' + (meta.reason ? ' · ' + String(meta.reason) : ''));
+  if (meta.highlighted) return 'Highlighted ' + String(meta.highlighted);
+  if (meta.flagged) return 'Flagged ' + String(meta.flagged);
+  if (meta.closed) return 'Closed ' + String(meta.closed);
+  if (meta.file) return 'Wrote ' + String(meta.file);
+  if (meta.alerted) return 'Alert fired';
+  if (meta.log_path) return 'Logged to file';
+  if (meta.error) return 'Error: ' + String(meta.error);
+  return '';
+}
 function encodePath(value){
   return encodeURIComponent(String(value || ''));
 }
@@ -733,8 +762,11 @@ async function openOverlay(section){
     body.innerHTML = panelCard('Proposed Actions', actionsList.length
       ? actionsList.map(item => {
           const status = String(item.status || 'proposed');
-          const badgeClass = status === 'auto_approved' ? 'status-good' : (status === 'approved' ? 'status-good' : (status === 'rejected' ? 'status-bad' : 'status-warn'));
-          return '<div class="mini queue-card" data-open-action="' + esc(String(item.id || '')) + '"><div class="row"><div class="mini-title">' + esc(item.action_type || 'action') + ' · ' + esc(item.thesis_claim || item.thesis_key || '') + '</div><div class="' + badgeClass + '">' + esc(status) + '</div></div><div class="mini-copy">Confidence ' + esc(confidenceText(item.confidence || 0)) + ' · evidence ' + esc(String(item.evidence_count || 0)) + '</div><div class="mini-copy">' + esc(item.audit_note || 'No audit note yet.') + '</div><div class="actions"><button class="btn small" data-approve-action="' + esc(String(item.id || '')) + '">Approve</button><button class="btn small" data-reject-action="' + esc(String(item.id || '')) + '">Reject</button><button class="btn small" data-preview-action="' + esc(String(item.id || '')) + '">Preview</button></div></div>';
+          const badgeClass = status === 'completed' ? 'status-good' : (status === 'failed' || status === 'rejected' ? 'status-bad' : (status === 'approved' || status === 'auto_approved' ? 'status-good' : 'status-warn'));
+          const exec = actionExecutionLabel(item);
+          const execSummary = actionExecutionSummary(item);
+          const canApprove = !['completed','failed','rejected'].includes(status);
+          return '<div class="mini queue-card" data-open-action="' + esc(String(item.id || '')) + '"><div class="row"><div class="mini-title">' + esc(item.action_type || 'action') + ' · ' + esc(item.thesis_claim || item.thesis_key || '') + '</div><div class="' + badgeClass + '">' + esc(status) + '</div></div><div class="mini-copy">Confidence ' + esc(confidenceText(item.confidence || 0)) + ' · evidence ' + esc(String(item.evidence_count || 0)) + '</div><div class="mini-copy">' + esc(item.audit_note || 'No audit note yet.') + '</div><div class="mini-copy" title="' + esc(exec.detail || '') + '"><span style="color:' + esc(exec.color) + ';font-weight:700">' + esc(exec.icon + ' ' + exec.text) + '</span>' + (execSummary ? ' · ' + esc(execSummary) : '') + '</div><div class="actions">' + (canApprove ? '<button class="btn small" data-approve-action="' + esc(String(item.id || '')) + '">Approve</button><button class="btn small" data-reject-action="' + esc(String(item.id || '')) + '">Reject</button>' : '') + '<button class="btn small" data-preview-action="' + esc(String(item.id || '')) + '">Preview</button></div></div>';
         }).join('')
       : '<div class="empty"><div class="empty-title">No proposed actions</div><div class="empty-sub">Use the thesis drawer to propose email, Slack, or webhook payloads without executing them.</div></div>');
     setTimeout(() => {
@@ -972,6 +1004,8 @@ function openThesisDrawer(detail, mode){
 
   if (mode === 'action'){
     state.currentActionDetail = detail || {};
+    const exec = actionExecutionLabel(detail || {});
+    const execSummary = actionExecutionSummary(detail || {});
     title.textContent = 'Action Detail';
     meta.textContent = (detail.action_type || 'action') + ' · ' + (detail.status || 'unknown');
     position.textContent = 'Proposed action';
@@ -983,9 +1017,10 @@ function openThesisDrawer(detail, mode){
         '<div class="meta-box"><div class="label">Evidence</div><div class="value">' + esc(String(detail.evidence_count || 0)) + '</div></div>' +
         '<div class="meta-box"><div class="label">Triggered By</div><div class="value">' + esc(detail.triggered_by || 'n/a') + '</div></div>' +
       '</div>' +
+      '<div class="mini" style="margin-top:12px"><div class="mini-copy" title="' + esc(exec.detail || '') + '"><span style="color:' + esc(exec.color) + ';font-weight:700">' + esc(exec.icon + ' ' + exec.text) + '</span>' + (execSummary ? ' · ' + esc(execSummary) : '') + '</div></div>' +
       '<div class="insight-grid" style="margin-top:18px">' +
         '<div class="insight-box"><strong>Audit Note</strong><div class="article-copy" style="font-size:15px">' + esc(detail.audit_note || 'No audit note yet.') + '</div></div>' +
-        '<div class="insight-box"><strong>Preview</strong><div class="article-copy" style="font-size:15px">' + esc(JSON.stringify(detail.preview || detail.payload || {}, null, 2)) + '</div></div>' +
+        '<div class="insight-box"><strong>Preview / Result</strong><div class="article-copy" style="font-size:15px">' + esc(JSON.stringify(detail.preview || detail.payload || detail.metadata || {}, null, 2)) + '</div></div>' +
       '</div>';
     foot.innerHTML = detail.thesis_key
       ? '<button class="btn small" data-open-drilldown="' + esc(detail.thesis_key || '') + '">Why this happened</button><button class="btn small" data-open-debate="' + esc(detail.thesis_key || '') + '">Bull vs Bear</button>'

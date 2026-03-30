@@ -328,6 +328,14 @@ def run_migration(verbose: bool = False):
         created_at TEXT
     )
     """)
+    _ensure_column(cur, "llm_usage_log", "task_type", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "lane", "TEXT DEFAULT 'reason'")
+    _ensure_column(cur, "llm_usage_log", "model", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "success", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "fallback_reason", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "latency_ms", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "input_size_estimate", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "validation_error", "TEXT DEFAULT ''")
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_llm_usage_created
     ON llm_usage_log(created_at)
@@ -628,6 +636,79 @@ def run_migration(verbose: bool = False):
     CREATE INDEX IF NOT EXISTS idx_portfolio_status
     ON portfolio_positions(status)
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS web_search_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT,
+        result_count INTEGER DEFAULT 0,
+        searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        triggered_by TEXT DEFAULT 'agent',
+        thesis_key TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_web_search_date
+    ON web_search_log(searched_at DESC)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS web_sourced_articles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        headline TEXT,
+        url TEXT UNIQUE,
+        body TEXT,
+        source TEXT,
+        search_query TEXT,
+        published_at TIMESTAMP,
+        fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_reasoned INTEGER DEFAULT 0,
+        thesis_key TEXT
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_web_articles_reasoned_fetched
+    ON web_sourced_articles(is_reasoned, fetched_at DESC)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS learned_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword TEXT NOT NULL,
+        confidence_delta REAL NOT NULL,
+        timeframe TEXT DEFAULT 'days',
+        mechanism TEXT,
+        market_implication TEXT,
+        discovered_from TEXT,
+        verification_count INTEGER DEFAULT 0,
+        accuracy_pct REAL DEFAULT 0.0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP,
+        last_verified TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        source TEXT DEFAULT 'learned'
+    )
+    """)
+    cur.execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_rules_keyword
+    ON learned_rules(keyword)
+    """)
+    _ensure_column(cur, "agent_memory", "subject", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "content", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "importance", "REAL DEFAULT 0.5")
+    _ensure_column(cur, "agent_memory", "last_recalled", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "recall_count", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_memory", "expired", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_memory", "run_id", "INTEGER")
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_memory_type
+    ON agent_memory(memory_type, importance DESC)
+    """)
+    _ensure_column(cur, "agent_actions", "approval_state", "TEXT DEFAULT 'pending'")
+    _ensure_column(cur, "agent_actions", "metadata", "TEXT DEFAULT '{}'")
+    _ensure_column(cur, "agent_actions", "reason", "TEXT DEFAULT ''")
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_agent_actions_approval
+    ON agent_actions(approval_state, status, created_at DESC)
+    """)
+    _ensure_column(cur, "agent_briefings", "format", "TEXT DEFAULT 'trader'")
 
     conn.commit()
 
@@ -655,6 +736,9 @@ def run_migration(verbose: bool = False):
             "sentiment_index_log",
             "portfolio_positions",
             "portfolio_snapshots",
+            "web_search_log",
+            "web_sourced_articles",
+            "learned_rules",
         ]:
             cur.execute("SELECT COUNT(*) FROM " + table)
             count = cur.fetchone()[0]

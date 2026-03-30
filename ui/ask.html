@@ -67,6 +67,8 @@
     .followups{margin-top:14px}
     .hidden{display:none !important}
     .tiny{font-size:12px}
+    .answer-points{margin:14px 0 0;padding-left:18px}
+    .answer-points li{margin:8px 0;color:#d6deec}
     @media (max-width: 980px){
       .layout{grid-template-columns:1fr}
       .search-shell{grid-template-columns:1fr}
@@ -275,10 +277,20 @@
 
     function renderAnswer(payload) {
       const answer = payload.answer || 'No answer returned.';
+      const card = payload.answer_card || {};
       const confidence = Math.max(0, Math.min(1, Number(payload.confidence || 0)));
       document.getElementById('gc-answer-state').classList.add('hidden');
       document.getElementById('gc-answer-panel').classList.remove('hidden');
-      document.getElementById('gc-answer-copy').innerHTML = esc(answer).replace(/\n/g, '<br>');
+      if (card.direct_answer) {
+        const points = (card.supporting_points || []).slice(0, 4);
+        document.getElementById('gc-answer-copy').innerHTML = `
+          <div style="font-weight:700;font-size:18px">${esc(card.direct_answer)}</div>
+          ${points.length ? `<ul class="answer-points">${points.map(point => `<li>${esc(point)}</li>`).join('')}</ul>` : ''}
+          ${card.caveat ? `<div class="tiny muted" style="margin-top:12px">${esc(card.caveat)}</div>` : ''}
+        `;
+      } else {
+        document.getElementById('gc-answer-copy').innerHTML = esc(answer).replace(/\n/g, '<br>');
+      }
 
       const shell = document.getElementById('gc-answer-confidence-shell');
       const fill = document.getElementById('gc-answer-confidence-fill');
@@ -289,7 +301,7 @@
       fill.style.background = colorForConfidence(confidence);
       meta.textContent = `Answer confidence: ${Math.round(confidence * 100)}% · Sources: ${(payload.sources || []).join(', ') || 'none'}`;
 
-      renderFollowups(payload.follow_up || []);
+      renderFollowups((card.follow_up && card.follow_up.length ? card.follow_up : payload.follow_up) || []);
       renderDataSection(payload.data || {});
     }
 

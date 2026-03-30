@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
 
+from services.ai_contracts import sanitize_model_name
+
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "geoclaw.db"
 
@@ -63,7 +65,7 @@ GUARDIAN_API_KEY = _clean_env("GUARDIAN_API_KEY")
 ALPHAVANTAGE_KEY = _clean_env("ALPHAVANTAGE_KEY")
 # Add OPENAI_API_KEY to .env.geoclaw to enable article analysis.
 OPENAI_API_KEY = _clean_env("OPENAI_API_KEY")
-OPENAI_MODEL = _clean_env("OPENAI_MODEL") or "gpt-5.4-mini"
+OPENAI_MODEL = sanitize_model_name(_clean_env("OPENAI_MODEL"), default="gpt-5.4-mini")
 OPENAI_TIMEOUT_SECONDS = 12
 LLM_PER_RUN_CALL_CAP = 6
 LLM_PER_HOUR_CALL_CAP = 24

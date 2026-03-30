@@ -113,6 +113,19 @@ def ensure_agent_tables():
         """
     )
     _ensure_column(cur, "agent_memory", "thesis_key", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "subject", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "content", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "importance", "REAL DEFAULT 0.5")
+    _ensure_column(cur, "agent_memory", "last_recalled", "TEXT DEFAULT ''")
+    _ensure_column(cur, "agent_memory", "recall_count", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_memory", "expired", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "agent_memory", "run_id", "INTEGER")
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memory_type
+        ON agent_memory(memory_type, importance DESC)
+        """
+    )
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS agent_decisions (
@@ -225,6 +238,14 @@ def ensure_agent_tables():
         )
         """
     )
+    _ensure_column(cur, "llm_usage_log", "task_type", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "lane", "TEXT DEFAULT 'reason'")
+    _ensure_column(cur, "llm_usage_log", "model", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "success", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "fallback_reason", "TEXT DEFAULT ''")
+    _ensure_column(cur, "llm_usage_log", "latency_ms", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "input_size_estimate", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "llm_usage_log", "validation_error", "TEXT DEFAULT ''")
     cur.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_llm_usage_created
@@ -303,6 +324,15 @@ def ensure_agent_tables():
         """
         CREATE INDEX IF NOT EXISTS idx_agent_actions_status_created
         ON agent_actions(status, created_at)
+        """
+    )
+    _ensure_column(cur, "agent_actions", "approval_state", "TEXT DEFAULT 'pending'")
+    _ensure_column(cur, "agent_actions", "metadata", "TEXT DEFAULT '{}'")
+    _ensure_column(cur, "agent_actions", "reason", "TEXT DEFAULT ''")
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_actions_approval
+        ON agent_actions(approval_state, status, created_at DESC)
         """
     )
     cur.execute(
@@ -388,6 +418,73 @@ def ensure_agent_tables():
             chain_count INTEGER DEFAULT 0,
             action_count INTEGER DEFAULT 0
         )
+        """
+    )
+    _ensure_column(cur, "agent_briefings", "format", "TEXT DEFAULT 'trader'")
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_search_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT,
+            result_count INTEGER DEFAULT 0,
+            searched_at TEXT,
+            triggered_by TEXT DEFAULT 'agent',
+            thesis_key TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_web_search_date
+        ON web_search_log(searched_at DESC)
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS web_sourced_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            headline TEXT,
+            url TEXT UNIQUE,
+            body TEXT,
+            source TEXT,
+            search_query TEXT,
+            published_at TEXT,
+            fetched_at TEXT,
+            is_reasoned INTEGER DEFAULT 0,
+            thesis_key TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_web_articles_reasoned_fetched
+        ON web_sourced_articles(is_reasoned, fetched_at DESC)
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS learned_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            confidence_delta REAL NOT NULL,
+            timeframe TEXT DEFAULT 'days',
+            mechanism TEXT,
+            market_implication TEXT,
+            discovered_from TEXT,
+            verification_count INTEGER DEFAULT 0,
+            accuracy_pct REAL DEFAULT 0.0,
+            created_at TEXT,
+            last_used TEXT,
+            last_verified TEXT,
+            status TEXT DEFAULT 'active',
+            source TEXT DEFAULT 'learned'
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_learned_rules_keyword
+        ON learned_rules(keyword)
         """
     )
     conn.commit()

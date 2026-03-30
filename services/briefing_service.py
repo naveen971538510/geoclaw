@@ -3,15 +3,16 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 from config import DB_PATH
+from services.ai_contracts import clean_briefing_bundle, render_briefing_bundle, validate_briefing_bundle
 from services.goal_service import ensure_agent_tables, get_conn, utc_now_iso
-from services.llm_service import analyse_custom_text
+from services.llm_service import analyse_custom_json
 from services.macro_calendar import MacroCalendar
 from services.reasoning_service import list_reasoning_chains
 
 
 def _normalize_audience(audience: str) -> str:
     clean = str(audience or "trader").strip().lower()
-    return clean if clean in {"trader", "executive", "raw_json"} else "trader"
+    return clean if clean in {"trader", "executive", "raw_json", "autonomy_report"} else "trader"
 
 
 def _table_exists(cur, table_name: str) -> bool:
@@ -89,6 +90,83 @@ def _normalize_briefing_text(text: str) -> str:
     return clean
 
 
+def _fallback_briefing_bundle(context: Dict) -> Dict:
+    theses = context["theses"]
+    contradictions = context["contradictions"]
+    actions = context["actions"]
+    chains = context["chains"]
+    calendar_events = context["calendar_events"]
+    regime = context["regime"]
+    sentiment = context["sentiment"]
+    prediction_accuracy = context.get("prediction_accuracy", {}) or {}
+
+    sections = [
+        {
+            "title": "Top developing stories",
+            "points": [
+                (
+                    f"{(thesis.get('title') or thesis.get('current_claim') or thesis.get('thesis_key') or 'Developing thesis')[:140]} "
+                    f"({round(float(thesis.get('confidence', 0.0) or 0.0) * 100)}% confidence, {thesis.get('status', 'active')}). "
+                    f"{str(thesis.get('last_update_reason', '') or '').strip()[:120]}"
+                ).strip()
+                for thesis in theses[:3]
+            ]
+            or ["The thesis layer has not formed a dominant high-confidence story yet."],
+        },
+        {
+            "title": "Conflicting signals",
+            "points": [
+                f"{item.get('headline', '')[:90]} — {str(item.get('reason', '') or '').strip()[:120]}"
+                for item in contradictions[:3]
+            ]
+            or ["No major contradiction alerts were recorded in the latest cycle."],
+        },
+        {
+            "title": "Downstream risks",
+            "points": [
+                str(chain.get("terminal_risk") or "Watch the downstream risk path for confirmation.")
+                for chain in chains[:3]
+            ]
+            or [f"Regime remains {regime.get('regime', 'UNKNOWN')}: {regime.get('description', '')}".strip()],
+        },
+        {
+            "title": "Recommended actions",
+            "points": [
+                f"{item.get('action_type', '')}: {str(item.get('thesis_key', '') or item.get('audit_note', '') or '').strip()[:140]}"
+                for item in actions[:4]
+            ]
+            or ["No new operator action proposals are pending right now."],
+        },
+        {
+            "title": "Macro calendar",
+            "points": [
+                f"{event.get('estimated_date', '')} — {event.get('name', '')} [{event.get('impact', '')}]"
+                for event in calendar_events[:4]
+            ]
+            or ["No major macro events are lined up in the next week."],
+        },
+    ]
+    watch_items = []
+    for thesis in theses[:4]:
+        suggestion = str(thesis.get("watchlist_suggestion") or thesis.get("watch_for_next") or "").strip()
+        if suggestion:
+            watch_items.append(suggestion)
+    for row in (context.get("source_reliability") or [])[:2]:
+        watch_items.append(
+            f"Source watch: {row.get('source_name', '')} reliability {round(float(row.get('reliability_score', 0.0) or 0.0) * 100)}%"
+        )
+    closing = (
+        f"Regime: {regime.get('regime', 'UNKNOWN')} | Sentiment: {sentiment.get('label', 'Unavailable')} "
+        f"({sentiment.get('score', 0)}). Prediction hit rate: {prediction_accuracy.get('accuracy_pct', 0)}%."
+    )
+    return {
+        "headline": "GeoClaw Intelligence Brief",
+        "sections": sections,
+        "watch_items": watch_items[:4],
+        "closing": closing,
+    }
+
+
 def _collect_briefing_context(conn) -> Dict:
     cur = conn.cursor()
     cur.execute(
@@ -160,6 +238,25 @@ def _collect_briefing_context(conn) -> Dict:
     except Exception:
         sentiment = {"score": 0, "label": "Unavailable"}
 
+    try:
+        from services.prediction_tracker import PredictionTracker
+
+        prediction_accuracy = PredictionTracker(_conn_db_path(conn)).get_accuracy_report()
+    except Exception:
+        prediction_accuracy = {"accuracy_pct": 0, "verified": 0, "refuted": 0, "neutral": 0}
+
+    source_reliability = []
+    if _table_exists(cur, "source_reliability"):
+        cur.execute(
+            """
+            SELECT source_name, reliability_score, total_predictions
+            FROM source_reliability
+            ORDER BY reliability_score DESC, total_predictions DESC
+            LIMIT 5
+            """
+        )
+        source_reliability = [dict(row) for row in cur.fetchall()]
+
     return {
         "theses": theses,
         "contradictions": contradictions,
@@ -170,6 +267,8 @@ def _collect_briefing_context(conn) -> Dict:
         "calendar_brief": calendar_brief,
         "regime": regime,
         "sentiment": sentiment,
+        "prediction_accuracy": prediction_accuracy,
+        "source_reliability": source_reliability,
     }
 
 
@@ -277,12 +376,13 @@ def generate_daily_briefing(db=None, run_id: int = None, audience: str = "trader
         text = json.dumps(raw_payload, indent=2)
     else:
         fallback_text = _fallback_briefing(theses, contradictions, chains, actions, calendar_brief=calendar_brief)
+        fallback_bundle = _fallback_briefing_bundle(context)
         system_text = (
-            "You are a senior intelligence analyst writing a daily briefing. "
-            "Write a professional, concise intelligence brief covering: "
-            "1. Top developing stories 2. Conflicting signals 3. Downstream risks "
-            "4. Recommended actions 5. What to watch tomorrow. "
-            "Use clear headers, be specific, maximum 400 words."
+            "You are a senior intelligence analyst writing a trader briefing. "
+            "Return strict JSON only with keys: headline, sections, watch_items, closing. "
+            "Each section must have title and points. "
+            "Use only the supplied facts. Do not add new numbers, dates, or entities. "
+            "Keep points concise and decision-focused."
         )
         user_text = (
             f"Theses: {json.dumps(theses, ensure_ascii=False)}\n"
@@ -290,15 +390,26 @@ def generate_daily_briefing(db=None, run_id: int = None, audience: str = "trader
             f"Chains: {json.dumps(chains, ensure_ascii=False)}\n"
             f"Actions: {json.dumps(actions, ensure_ascii=False)}\n"
             f"Calibration: {json.dumps(context['calibration'], ensure_ascii=False)}\n"
-            f"MacroCalendar: {calendar_brief}"
+            f"MacroCalendar: {json.dumps(context['calendar_events'], ensure_ascii=False)}\n"
+            f"Regime: {json.dumps(context['regime'], ensure_ascii=False)}\n"
+            f"Sentiment: {json.dumps(context['sentiment'], ensure_ascii=False)}\n"
+            f"PredictionAccuracy: {json.dumps(context['prediction_accuracy'], ensure_ascii=False)}\n"
+            f"SourceReliability: {json.dumps(context['source_reliability'], ensure_ascii=False)}\n"
+            f"FallbackBriefing: {fallback_text}"
         )
-        text = analyse_custom_text(
+        bundle = analyse_custom_json(
             system_text,
             user_text,
-            fallback_text=fallback_text,
+            fallback=fallback_bundle,
             mode="daily_briefing",
             cache_key="daily_briefing::" + audience + "::" + utc_now_iso()[:13],
-        )["text"]
+            validator=validate_briefing_bundle,
+            cleaner=lambda payload: clean_briefing_bundle(payload, fallback_bundle),
+            lane="polish",
+            task_type="briefing_sections",
+            max_output_tokens=520,
+        )["analysis"]
+        text = render_briefing_bundle(clean_briefing_bundle(bundle, fallback_bundle))
         text = _normalize_briefing_text(text)
         if "Macro Calendar" not in text:
             text = text.rstrip() + "\n\n" + calendar_brief
@@ -318,7 +429,26 @@ def generate_daily_briefing(db=None, run_id: int = None, audience: str = "trader
     if store and audience == "trader":
         cur = conn.cursor()
         briefing_columns = {row[1] for row in cur.execute("PRAGMA table_info(agent_briefings)").fetchall()}
-        if "run_id" in briefing_columns:
+        if "run_id" in briefing_columns and "format" in briefing_columns:
+            cur.execute(
+                """
+                INSERT INTO agent_briefings (
+                    briefing_text, generated_at, thesis_count, contradiction_count, chain_count, action_count, run_id, format
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item["briefing_text"],
+                    item["generated_at"],
+                    item["thesis_count"],
+                    item["contradiction_count"],
+                    item["chain_count"],
+                    item["action_count"],
+                    int(run_id) if run_id else None,
+                    "trader",
+                ),
+            )
+        elif "run_id" in briefing_columns:
             cur.execute(
                 """
                 INSERT INTO agent_briefings (
@@ -372,6 +502,23 @@ def generate_briefing(db_path=None, run_id: int = None, audience: str = "trader"
 def get_latest_briefing(audience: str = "trader") -> Dict:
     ensure_agent_tables()
     audience = _normalize_audience(audience)
+    if audience == "autonomy_report":
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM agent_briefings
+            WHERE COALESCE(format, 'trader') = 'autonomy_report'
+            ORDER BY generated_at DESC, id DESC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            return dict(row)
+        return {"briefing_text": "No autonomy report has been written yet.", "generated_at": utc_now_iso(), "format": "autonomy_report"}
     if audience != "trader":
         return generate_daily_briefing(audience=audience, store=False)
     conn = get_conn()

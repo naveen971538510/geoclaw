@@ -191,6 +191,8 @@ def build_thesis_claim(headline, related_headlines, source_name, category) -> Di
         cache_key=f"thesis_claim::{normalize_thesis_key(headline)}::{category}",
         validator=_valid,
         cleaner=_clean,
+        lane="reason",
+        task_type="thesis_claim_bundle",
     )["analysis"]
 
 

@@ -3,6 +3,8 @@ import re
 import sqlite3
 from typing import Callable, Dict, List, Optional
 
+from services.ai_contracts import default_query_answer_bundle, format_query_answer_text
+
 
 QUERY_PATTERNS = [
     (r"what.*(driving|moving|causing).*oil", "explain_asset"),
@@ -68,9 +70,17 @@ class QueryEngine:
         result["sources"] = [str(item) for item in (result.get("sources") or [])]
         result["confidence"] = max(0.0, min(1.0, float(result.get("confidence", 0.0) or 0.0)))
         result.setdefault("follow_up", self._suggest_followups(q))
-
+        answer_card = self._build_answer_card(clean_question, result)
         if self.llm and result.get("data"):
-            result["answer"] = self._enhance_with_llm(clean_question, result)
+            answer_card = self._enhance_with_llm(clean_question, result, answer_card)
+        result["follow_up"] = list(answer_card.get("follow_up") or result.get("follow_up") or [])
+        result["grounding_points"] = list(answer_card.get("supporting_points") or [])
+        result["answer_card"] = {
+            **default_query_answer_bundle(answer_card),
+            "confidence_pct": round(result["confidence"] * 100),
+            "sources": result["sources"],
+        }
+        result["answer"] = format_query_answer_text(answer_card, result["confidence"], result["sources"])
 
         return result
 
@@ -705,22 +715,214 @@ class QueryEngine:
         count = min(3, len(SUGGESTIONS))
         return random.sample(SUGGESTIONS, count)
 
-    def _enhance_with_llm(self, question: str, result: Dict) -> str:
+    def _enhance_with_llm(self, question: str, result: Dict, fallback_card: Dict) -> Dict:
         try:
-            if not self.llm.available():
-                return str(result.get("answer", "") or "")
-            prompt = (
-                f"Question: {question}\n\n"
-                f"Data available: {str(result.get('data', {}))[:600]}\n\n"
-                f"Draft answer: {str(result.get('answer', ''))[:400]}\n\n"
-                "Rewrite the answer in 2-3 clear, professional sentences. Keep all facts. No markdown."
+            if not self.llm.available() or not hasattr(self.llm, "polish_query_answer"):
+                return fallback_card
+            return self.llm.polish_query_answer(
+                question,
+                fallback_card,
+                self._build_polish_context(result),
             )
-            enhanced = self.llm.analyse_article(question, prompt)
-            if enhanced and enhanced.get("reasoning"):
-                return str(enhanced.get("reasoning") or result.get("answer", ""))
         except Exception:
-            pass
-        return str(result.get("answer", "") or "")
+            return fallback_card
+
+    def _build_answer_card(self, question: str, result: Dict) -> Dict:
+        direct_answer = str(result.get("answer") or "").strip().split("\n")[0].strip() or "No answer available."
+        supporting_points = self._build_grounding_points(result)
+        if len(supporting_points) < 2 and result.get("sources"):
+            supporting_points.append("Grounded in live database records from " + ", ".join(result.get("sources")[:2]) + ".")
+        return {
+            "direct_answer": direct_answer,
+            "supporting_points": supporting_points[:4] or ["The retrieved records do not yet provide enough corroboration."],
+            "follow_up": list(result.get("follow_up") or self._suggest_followups(question.lower()))[:3],
+            "caveat": "" if result.get("confidence", 0.0) >= 0.45 else "Confidence is limited because the matching evidence is still thin.",
+        }
+
+    def _build_grounding_points(self, result: Dict) -> List[str]:
+        data = result.get("data", {}) or {}
+        points = []
+
+        theses = data.get("theses") or data.get("high_risk_theses") or data.get("results") or []
+        for thesis in theses[:2]:
+            thesis_key = str(thesis.get("thesis_key") or thesis.get("current_claim") or "").strip()
+            if not thesis_key:
+                continue
+            confidence = round(float(thesis.get("confidence", 0.0) or 0.0) * 100)
+            velocity = float(thesis.get("confidence_velocity", 0.0) or 0.0)
+            velocity_text = f"velocity {velocity:+.3f}" if velocity else "velocity stable"
+            risk = str(thesis.get("terminal_risk") or thesis.get("status") or "active").strip()
+            points.append(f"{thesis_key[:140]} ({confidence}% confidence, {risk}, {velocity_text}).")
+
+        articles = data.get("articles") or data.get("recent_articles") or []
+        for article in articles[:2]:
+            headline = str(article.get("headline") or "").strip()
+            if not headline:
+                continue
+            source = str(article.get("source_name") or article.get("source") or "Unknown source").strip()
+            published = str(article.get("published_at") or article.get("fetched_at") or "").replace("T", " ")[:16]
+            points.append(f"Recent article: {headline[:120]} ({source}{' · ' + published if published else ''}).")
+
+        actions = data.get("actions") or []
+        if actions:
+            top_action = actions[0]
+            points.append(
+                f"Action queue signal: {top_action.get('action_type', 'action')} for {str(top_action.get('thesis_key', '') or '').strip()[:100]}."
+            )
+
+        watch_items = data.get("items") or []
+        for item in watch_items[:2]:
+            points.append(
+                f"Watch next: {str(item.get('watchlist_suggestion') or '').strip()[:80]} from {str(item.get('thesis_key') or '').strip()[:100]}."
+            )
+
+        contradictions = data.get("contradictions") or []
+        if contradictions:
+            top_contradiction = contradictions[0]
+            points.append(
+                f"Contradiction count is active, led by {str(top_contradiction.get('thesis_key', '') or '').strip()[:100]}."
+            )
+
+        regime = data.get("regime") if isinstance(data.get("regime"), dict) else data if {"regime", "description"} <= set(data.keys()) else {}
+        if regime:
+            points.append(
+                f"Market regime is {regime.get('regime', 'UNKNOWN')} with {str(regime.get('description', '') or '').strip()[:140]}."
+            )
+
+        pending_actions = data.get("pending_actions")
+        if pending_actions not in (None, ""):
+            points.append(f"{int(pending_actions or 0)} pending actions are currently queued.")
+
+        calibration_keys = {"accuracy_pct", "verified", "refuted", "unknown"}
+        if calibration_keys & set(data.keys()):
+            points.append(
+                f"Observed agent calibration: {float(data.get('accuracy_pct', 0.0) or 0.0):.1f}% over the last 24 hours."
+            )
+
+        deduped = []
+        seen = set()
+        for point in points:
+            key = point.lower()
+            if key in seen:
+                continue
+            deduped.append(point)
+            seen.add(key)
+        return deduped[:4]
+
+    def _build_polish_context(self, result: Dict) -> str:
+        data = result.get("data", {}) or {}
+        lines = [f"Original answer: {result.get('answer', '')}"]
+        theses = data.get("theses") or data.get("high_risk_theses") or data.get("results") or []
+        if theses:
+            for thesis in theses[:2]:
+                thesis_key = str(thesis.get("thesis_key") or thesis.get("current_claim") or "").strip()
+                if not thesis_key:
+                    continue
+                history = self._thesis_history(thesis_key)
+                contradiction_count = self._thesis_contradiction_count(thesis_key)
+                lines.append(
+                    f"Thesis: {thesis_key} | confidence={round(float(thesis.get('confidence', 0.0) or 0.0) * 100)}% "
+                    f"| velocity={float(thesis.get('confidence_velocity', 0.0) or 0.0):+.3f} "
+                    f"| contradictions={contradiction_count} | history={history}"
+                )
+        articles = data.get("articles") or data.get("recent_articles") or []
+        if articles:
+            lines.append("Recent articles:")
+            for article in articles[:3]:
+                source = str(article.get("source_name") or article.get("source") or "Unknown source")
+                reliability = self._source_reliability(source)
+                lines.append(
+                    f"- {str(article.get('headline', '') or '').strip()[:140]} | source={source} | source_reliability={reliability:.2f}"
+                )
+        prediction_accuracy = self._prediction_accuracy()
+        if prediction_accuracy:
+            lines.append(
+                f"Prediction accuracy: {prediction_accuracy.get('accuracy_pct', 0)}% "
+                f"(verified={prediction_accuracy.get('verified', 0)}, refuted={prediction_accuracy.get('refuted', 0)})"
+            )
+        return "\n".join(lines)
+
+    def _thesis_history(self, thesis_key: str) -> List[int]:
+        conn = self._db()
+        try:
+            if not self._table_exists(conn, "thesis_confidence_log"):
+                return []
+            rows = conn.execute(
+                """
+                SELECT confidence
+                FROM thesis_confidence_log
+                WHERE thesis_key=?
+                ORDER BY recorded_at DESC, id DESC
+                LIMIT 5
+                """,
+                (thesis_key,),
+            ).fetchall()
+            return [round(float(row["confidence"] or 0.0) * 100) for row in rows]
+        finally:
+            conn.close()
+
+    def _thesis_contradiction_count(self, thesis_key: str) -> int:
+        conn = self._db()
+        try:
+            if not self._table_exists(conn, "contradictions"):
+                return 0
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM contradictions
+                WHERE thesis_key=? AND COALESCE(resolved, 0)=0
+                """,
+                (thesis_key,),
+            ).fetchone()
+            return int((row["cnt"] if row else 0) or 0)
+        finally:
+            conn.close()
+
+    def _source_reliability(self, source_name: str) -> float:
+        conn = self._db()
+        try:
+            if not self._table_exists(conn, "source_reliability"):
+                return 0.65
+            row = conn.execute(
+                """
+                SELECT reliability_score
+                FROM source_reliability
+                WHERE source_name LIKE ?
+                ORDER BY reliability_score DESC
+                LIMIT 1
+                """,
+                (f"%{str(source_name or '').strip()}%",),
+            ).fetchone()
+            return float((row["reliability_score"] if row else 0.65) or 0.65)
+        finally:
+            conn.close()
+
+    def _prediction_accuracy(self) -> Dict:
+        conn = self._db()
+        try:
+            if not self._table_exists(conn, "thesis_predictions"):
+                return {}
+            rows = conn.execute(
+                """
+                SELECT outcome, COUNT(*) AS cnt
+                FROM thesis_predictions
+                WHERE outcome IN ('verified', 'refuted', 'neutral')
+                GROUP BY outcome
+                """
+            ).fetchall()
+            counts = {str(row["outcome"]): int(row["cnt"] or 0) for row in rows}
+            verified = counts.get("verified", 0)
+            refuted = counts.get("refuted", 0)
+            neutral = counts.get("neutral", 0)
+            accuracy = verified / max(verified + refuted, 1) * 100
+            return {
+                "verified": verified,
+                "refuted": refuted,
+                "neutral": neutral,
+                "accuracy_pct": round(accuracy, 1),
+            }
+        finally:
+            conn.close()
 
     def _dedupe_rows(self, rows, key_name: str) -> List[Dict]:
         items = [dict(row) for row in rows]
