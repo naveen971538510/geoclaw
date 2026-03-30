@@ -2,7 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#161b22">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GeoClaw">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <title>GeoClaw Watchlist</title>
   <style>
     :root{--bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--green:#2fb171;--red:#d95c5c}
@@ -119,6 +125,14 @@
     document.getElementById('wl-add').addEventListener('click', addWatch);
     loadWatchlist().catch(() => { document.getElementById('wl-wrap').textContent = 'Could not load watchlist.'; });
     setInterval(refreshPrices, 60000);
+  </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/static/sw.js")
+          .catch(e => console.log("SW registration failed:", e));
+      });
+    }
   </script>
 </body>
 </html>

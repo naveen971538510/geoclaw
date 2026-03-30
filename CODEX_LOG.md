@@ -1681,3 +1681,44 @@ Highlights:
 - Telegram service now supports outbound alerts, latest-brief delivery, command handling, and natural-language query responses
 - webhook routes are tolerant when credentials are absent, so the platform does not fail closed in local development
 - alert fanout now includes Telegram whenever bot credentials are configured
+
+## Night 5 — Phase 12
+
+Status: Progressive Web App shell complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/static/manifest.json`
+- `/Users/naveenkumar/GeoClaw/static/sw.js`
+- `/Users/naveenkumar/GeoClaw/static/icon-192.png`
+- `/Users/naveenkumar/GeoClaw/static/icon-512.png`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+- `/Users/naveenkumar/GeoClaw/ui/ask.html`
+- `/Users/naveenkumar/GeoClaw/ui/live.html`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+- `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+- `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- `/Users/naveenkumar/GeoClaw/ui/portfolio.html`
+- `/Users/naveenkumar/GeoClaw/ui/agent_runs.html`
+
+Routes added:
+- `GET /manifest.json`
+- static mount at `/static/*`
+
+Verification:
+- `python3 -m py_compile main.py` ✓
+- `curl -s http://127.0.0.1:8000/manifest.json` ✓
+- `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/static/icon-192.png` ✓
+- all HTML pages now include manifest, Apple mobile, theme-color, and service-worker registration tags ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- GeoClaw can now be installed as a phone-friendly web app with a cached shell for core pages
+- every primary UI page advertises the manifest and registers the shared service worker on load
+- FastAPI now serves the static PWA assets directly, including a compatibility route for `/manifest.json`

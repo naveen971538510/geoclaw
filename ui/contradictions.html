@@ -2,7 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#161b22">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GeoClaw">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <title>GeoClaw Contradictions</title>
   <style>
     :root{--bg:#0b1016;--panel:#101722;--line:#263244;--text:#f4f7fb;--muted:#90a0b7;--red:#d95c5c;--yellow:#d39a33}
@@ -94,6 +100,14 @@
       document.getElementById('gc-active').textContent = 'Could not load contradictions.';
       document.getElementById('gc-resolved').textContent = 'Could not load resolved contradictions.';
     });
+  </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/static/sw.js")
+          .catch(e => console.log("SW registration failed:", e));
+      });
+    }
   </script>
 </body>
 </html>

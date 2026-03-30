@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, RedirectResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from data import demo_articles
 from helpers import (
     filter_articles_by_field,
@@ -14,6 +15,7 @@ from config import DB_PATH, GEOCLAW_LOCAL_TOKEN, OPENAI_API_KEY
 from services.logging_service import get_logger
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 logger = get_logger("main")
 
 
@@ -492,6 +494,11 @@ def geoclaw_live_page():
     from services.terminal_ui_service import render_terminal_asset
 
     return HTMLResponse(render_terminal_asset("live.html"))
+
+
+@app.get("/manifest.json")
+def geoclaw_manifest():
+    return FileResponse("static/manifest.json", media_type="application/manifest+json")
 
 
 @app.get("/theses", response_class=HTMLResponse)
