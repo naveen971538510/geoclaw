@@ -2090,6 +2090,18 @@ def api_sectors():
         return JSONResponse({"status": "error", "route": "/api/sectors", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/correlations", response_class=JSONResponse)
+def api_correlations(hours: int = 48, symbols: str = ""):
+    try:
+        from services.correlation_engine import CorrelationEngine
+
+        symbol_list = [item.strip() for item in str(symbols or "").split(",") if item.strip()]
+        correlations = CorrelationEngine().compute_correlations(str(DB_PATH), symbol_list or None, int(hours or 48))
+        return JSONResponse({"status": "ok", "correlations": correlations})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/correlations", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

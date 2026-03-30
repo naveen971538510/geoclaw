@@ -1905,3 +1905,27 @@ Highlights:
 - GeoClaw now maps active theses into sector tilts with ETF proxies, signal scores, and trend direction
 - the dashboard includes a compact sector rotation table alongside the broader macro and regional views
 - energy and conflict-linked sectors now surface clearly when risk narratives intensify
+
+## Night 5 — Phase 20
+
+Status: Cross-asset correlation engine complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/correlation_engine.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+
+Routes added:
+- `GET /api/correlations`
+
+Verification:
+- `python3 -m py_compile services/correlation_engine.py main.py` ✓
+- `curl -s "http://127.0.0.1:8000/api/correlations?hours=24" | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `105`
+
+Highlights:
+- GeoClaw can now compute Pearson correlations across the stored price snapshot series without any external statistics dependency
+- the correlation route degrades safely when the history window is too shallow, returning a structured insufficiency payload instead of an error
+- thesis-specific correlation insight hooks are in place for future drilldown use
