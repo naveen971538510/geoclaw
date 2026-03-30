@@ -2,14 +2,34 @@
 """Full route smoke test. Server must be running on port 8000."""
 
 import json
+import sqlite3
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
 BASE = "http://127.0.0.1:8000"
 OK = 0
 FAIL = 0
+
+
+def first_thesis():
+    try:
+        conn = sqlite3.connect("geoclaw.db")
+        row = conn.execute(
+            """
+            SELECT thesis_key
+            FROM agent_theses
+            WHERE COALESCE(status, '') != 'superseded'
+            ORDER BY confidence DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        conn.close()
+        return urllib.parse.quote(str(row[0] if row else ""))
+    except Exception:
+        return ""
 
 
 def chk(path, method="GET", code=200, key=None):
@@ -51,12 +71,15 @@ if __name__ == "__main__":
     for page in [
         "/dashboard",
         "/terminal",
+        "/ask",
+        "/live",
         "/theses",
         "/articles",
         "/agent-runs",
         "/briefings",
         "/contradictions",
         "/watchlist",
+        "/portfolio",
     ]:
         chk(page)
     chk("/health", key="status")
@@ -78,6 +101,25 @@ if __name__ == "__main__":
     chk("/terminal/actions", key=["actions", "items"])
     chk("/terminal/diff", key="status")
     chk("/agent-briefing/latest", key="status")
+    chk("/api/ask?q=what+is+driving+oil", key="answer")
+    chk("/api/ask/suggestions", key="suggestions")
+    chk("/api/events/history", key="events")
+    chk("/api/events/types", key="types")
+    chk("/api/predictions", key="predictions")
+    chk("/api/predictions/accuracy", key="report")
+    chk("/api/calendar", key="events")
+    chk("/api/calendar/today", key="events")
+    chk("/api/intelligence/duplicates", key="pairs")
+    chk("/api/sources/reliability", key="sources")
+    chk("/api/sentiment/current", key="index")
+    chk("/api/sentiment/history", key="history")
+    chk("/api/portfolio", key="summary")
+    chk("/api/debate/" + first_thesis(), key="debate")
+    chk("/api/export/theses.csv")
+    chk("/api/export/full.json", key="theses")
+    chk("/api/telegram/test", method="POST", code=200, key="available")
+    chk("/manifest.json")
+    chk("/static/manifest.json")
     chk("/agent-journal")
     chk("/agent-reasoning")
     print(f"\n{'=' * 50}")

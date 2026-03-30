@@ -1811,3 +1811,21 @@ Highlights:
 - the suite now covers natural-language querying, debate outputs, prediction tracking, deduplication, sentiment scoring, exports, and macro calendar logic
 - a shared temp-database fixture module keeps the new tests schema-aware and lightweight
 - thesis deduplication threshold was tuned from `0.72` to `0.65` so realistic near-duplicate phrasing now merges as intended
+
+## Night 5 — Phase 16
+
+Status: Route audit and smoke update complete
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/tests/smoke_test.py`
+
+Verification:
+- `python3 -m py_compile tests/smoke_test.py` ✓
+- `python3 tests/smoke_test.py` ✓
+- smoke routes passing: `51/51`
+- `grep -c "@app\\.get\\|@app\\.post\\|@app\\.delete\\|@app\\.put\\|@app\\.patch" main.py` → `132`
+
+Highlights:
+- the smoke test now covers the Night 5 surface area, including Ask, Live, predictions, calendar, debate, export, Telegram, and PWA endpoints
+- the debate smoke path resolves the top thesis dynamically from the live database before hitting the route
+- route count is already well above the Night 5 minimum, so the API surface is on track for final verification
