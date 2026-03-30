@@ -1,0 +1,270 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Live Feed</title>
+  <style>
+    :root{
+      --bg:#0b1016;
+      --panel:#101722;
+      --panel2:#161f2d;
+      --line:#263244;
+      --text:#f4f7fb;
+      --muted:#90a0b7;
+      --green:#2fb171;
+      --yellow:#d39a33;
+      --red:#d95c5c;
+      --blue:#4da3ff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    nav{display:flex;gap:16px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:#0d131c;flex-wrap:wrap}
+    nav a{color:#8b949e;text-decoration:none}
+    nav strong{color:#fff}
+    .page{padding:20px;max-width:1500px;margin:0 auto}
+    .topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+    .title{font-size:34px;font-weight:800;letter-spacing:-.03em}
+    .sub{color:var(--muted);max-width:760px}
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:16px}
+    .status-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+    .status-pill{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:999px;background:#152032;border:1px solid #294564}
+    .dot{width:10px;height:10px;border-radius:999px;background:var(--green)}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .btn{background:#18314e;color:#fff;border:1px solid #33567e;border-radius:10px;padding:7px 11px;cursor:pointer}
+    .btn.secondary{background:#151d2a;border-color:var(--line);color:#c9d5e4}
+    .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:14px}
+    .filter-box{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:10px}
+    .check{display:flex;gap:8px;align-items:center;margin:6px 0;color:#c9d5e4}
+    #gc-stream{display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 280px);overflow:auto;padding-right:4px}
+    .event{border:1px solid var(--line);border-radius:14px;background:#0d131c;padding:12px 14px}
+    .event-head{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    .event-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:700}
+    .badge.green{background:rgba(47,177,113,.14);color:#99ebbf}
+    .badge.red{background:rgba(217,92,92,.14);color:#ffb0b0}
+    .badge.yellow{background:rgba(211,154,51,.14);color:#ffd488}
+    .badge.blue{background:rgba(77,163,255,.14);color:#b6d7ff}
+    .muted{color:var(--muted)}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0 0;display:none}
+    .event.open pre{display:block}
+    .stat{padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .stat:last-child{border-bottom:none}
+    .empty{color:var(--muted);border:1px dashed var(--line);border-radius:14px;padding:16px}
+    select{background:#0d131c;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+    @media (max-width: 980px){.layout{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>GeoClaw</strong>
+    <a class="gc-nav-link" href="/dashboard">Dashboard</a>
+    <a class="gc-nav-link" href="/terminal">Terminal</a>
+    <a class="gc-nav-link" href="/ask">Ask</a>
+    <a class="gc-nav-link" href="/live">Live</a>
+    <a class="gc-nav-link" href="/theses">Theses</a>
+    <a class="gc-nav-link" href="/articles">Articles</a>
+    <a class="gc-nav-link" href="/briefings">Briefings</a>
+    <a class="gc-nav-link" href="/contradictions">Contradictions</a>
+    <a class="gc-nav-link" href="/watchlist">Watchlist</a>
+    <a class="gc-nav-link" href="/agent-runs">Agent Runs</a>
+  </nav>
+  <div class="page">
+    <div class="topbar">
+      <div>
+        <div class="title">⚡ Live Agent Feed</div>
+        <div class="sub">Watch thesis changes, alerts, actions, briefings, and full run lifecycle events stream in real time from the Night 5 event bus.</div>
+      </div>
+      <div class="controls">
+        <button class="btn secondary" id="gc-pause-btn">Pause</button>
+        <button class="btn secondary" id="gc-clear-btn">Clear</button>
+        <select id="gc-filter-select">
+          <option value="all">All event families</option>
+          <option value="core">Core run events</option>
+          <option value="risk">Risk and alert events</option>
+          <option value="thesis">Thesis events</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="layout">
+      <main class="panel">
+        <div class="status-bar">
+          <div class="status-pill"><span class="dot" id="gc-conn-dot"></span><span id="gc-conn-text">Connecting…</span></div>
+          <div class="muted">Events: <strong id="gc-count">0</strong></div>
+          <div class="muted">Last event: <strong id="gc-last-event">never</strong></div>
+        </div>
+
+        <div class="filters">
+          <div class="filter-box">
+            <div class="muted" style="margin-bottom:6px">Event filters</div>
+            <label class="check"><input type="checkbox" data-event="thesis_updated" checked> thesis_updated</label>
+            <label class="check"><input type="checkbox" data-event="thesis_confirmed" checked> thesis_confirmed</label>
+            <label class="check"><input type="checkbox" data-event="action_proposed" checked> action_proposed</label>
+            <label class="check"><input type="checkbox" data-event="alert_fired" checked> alert_fired</label>
+            <label class="check"><input type="checkbox" data-event="agent_run_started" checked> agent_run_started</label>
+            <label class="check"><input type="checkbox" data-event="agent_run_complete" checked> agent_run_complete</label>
+            <label class="check"><input type="checkbox" data-event="thesis_superseded" checked> thesis_superseded</label>
+            <label class="check"><input type="checkbox" data-event="briefing_generated" checked> briefing_generated</label>
+            <label class="check"><input type="checkbox" data-event="heartbeat"> heartbeat</label>
+          </div>
+        </div>
+
+        <div id="gc-stream" class="empty">Connecting to the live stream…</div>
+      </main>
+
+      <aside class="panel">
+        <div class="muted" style="text-transform:uppercase;letter-spacing:.08em;font-size:12px">Session stats</div>
+        <div class="stat"><div class="muted">Events this session</div><div id="gc-stat-events" style="font-size:22px;font-weight:800">0</div></div>
+        <div class="stat"><div class="muted">Most common event</div><div id="gc-stat-common">n/a</div></div>
+        <div class="stat"><div class="muted">Last agent run</div><div id="gc-stat-run">n/a</div></div>
+        <div class="stat"><div class="muted">Thesis changes</div><div id="gc-stat-thesis">0</div></div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    const activeNav = window.location.pathname;
+    document.querySelectorAll('.gc-nav-link').forEach(a => {
+      a.style.color = a.getAttribute('href') === activeNav ? '#e6edf3' : '#8b949e';
+      a.style.fontWeight = a.getAttribute('href') === activeNav ? '600' : '400';
+    });
+
+    const state = {
+      paused: false,
+      events: [],
+      counts: {},
+      thesisChanges: 0,
+      lastRunAt: null,
+      eventSource: null,
+    };
+
+    function relTime(ts) {
+      const ms = (Number(ts || 0) * 1000);
+      if (!ms) return 'never';
+      const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins}m ago`;
+      return `${Math.floor(mins / 60)}h ago`;
+    }
+
+    function eventBadge(type) {
+      if (type.includes('alert') || type.includes('anomaly')) return 'red';
+      if (type.includes('thesis') || type.includes('prediction')) return 'blue';
+      if (type.includes('run') || type.includes('briefing')) return 'green';
+      return 'yellow';
+    }
+
+    function isEventTypeEnabled(type) {
+      const toggle = document.querySelector(`[data-event="${type}"]`);
+      if (toggle) return !!toggle.checked;
+      if (type === 'heartbeat') return !!document.querySelector('[data-event="heartbeat"]')?.checked;
+      const filter = document.getElementById('gc-filter-select').value;
+      if (filter === 'core') return type.includes('agent_run') || type.includes('briefing');
+      if (filter === 'risk') return type.includes('alert') || type.includes('prediction') || type.includes('anomaly');
+      if (filter === 'thesis') return type.includes('thesis');
+      return true;
+    }
+
+    function updateConnectionStatus(connected) {
+      document.getElementById('gc-conn-dot').style.background = connected ? '#2fb171' : '#d95c5c';
+      document.getElementById('gc-conn-text').textContent = connected ? 'Connected' : 'Disconnected';
+    }
+
+    function updateStats(event) {
+      state.counts[event.type] = (state.counts[event.type] || 0) + 1;
+      if (event.type.startsWith('thesis_')) state.thesisChanges += 1;
+      if (event.type === 'agent_run_complete') state.lastRunAt = event.timestamp;
+      document.getElementById('gc-count').textContent = String(state.events.length);
+      document.getElementById('gc-stat-events').textContent = String(state.events.length);
+      document.getElementById('gc-stat-thesis').textContent = String(state.thesisChanges);
+      document.getElementById('gc-last-event').textContent = relTime(event.timestamp);
+      document.getElementById('gc-stat-run').textContent = state.lastRunAt ? relTime(state.lastRunAt) : 'n/a';
+      const common = Object.entries(state.counts).sort((a, b) => b[1] - a[1])[0];
+      document.getElementById('gc-stat-common').textContent = common ? `${common[0]} (${common[1]})` : 'n/a';
+    }
+
+    function prependEventRow(event) {
+      const stream = document.getElementById('gc-stream');
+      const row = document.createElement('div');
+      row.className = 'event';
+      row.innerHTML = `
+        <div class="event-head">
+          <div class="event-meta">
+            <span class="muted">${esc(new Date(Number(event.timestamp || 0) * 1000).toLocaleTimeString())}</span>
+            <span class="badge ${eventBadge(event.type)}">${esc(event.type)}</span>
+            <span>${esc(event.description || event.type)}</span>
+          </div>
+          <span class="muted">${esc(relTime(event.timestamp))}</span>
+        </div>
+        <pre>${esc(JSON.stringify(event.data || {}, null, 2))}</pre>
+      `;
+      row.addEventListener('click', () => row.classList.toggle('open'));
+      if (stream.classList.contains('empty')) {
+        stream.classList.remove('empty');
+        stream.innerHTML = '';
+      }
+      stream.prepend(row);
+      while (stream.children.length > 100) stream.removeChild(stream.lastChild);
+    }
+
+    function handleEvent(event) {
+      if (state.paused) return;
+      if (!isEventTypeEnabled(event.type)) return;
+      state.events.unshift(event);
+      state.events = state.events.slice(0, 100);
+      prependEventRow(event);
+      updateStats(event);
+    }
+
+    async function loadHistory() {
+      try {
+        const data = await fetch('/api/events/history?limit=15', { cache: 'no-store' }).then(r => r.json());
+        (data.events || []).forEach(handleEvent);
+      } catch (err) {}
+    }
+
+    function connect() {
+      if (state.eventSource) state.eventSource.close();
+      updateConnectionStatus(false);
+      const es = new EventSource('/api/events/stream');
+      state.eventSource = es;
+      es.onopen = () => updateConnectionStatus(true);
+      es.onmessage = (payload) => {
+        try {
+          const event = JSON.parse(payload.data);
+          if (event.type === 'heartbeat' && !isEventTypeEnabled('heartbeat')) return;
+          handleEvent(event);
+        } catch (err) {}
+      };
+      es.onerror = () => {
+        updateConnectionStatus(false);
+        setTimeout(() => connect(), 5000);
+      };
+    }
+
+    document.getElementById('gc-pause-btn').addEventListener('click', () => {
+      state.paused = !state.paused;
+      document.getElementById('gc-pause-btn').textContent = state.paused ? 'Resume' : 'Pause';
+    });
+    document.getElementById('gc-clear-btn').addEventListener('click', () => {
+      state.events = [];
+      state.counts = {};
+      state.thesisChanges = 0;
+      document.getElementById('gc-stream').className = 'empty';
+      document.getElementById('gc-stream').innerHTML = 'Stream cleared. Waiting for new events…';
+      document.getElementById('gc-count').textContent = '0';
+      document.getElementById('gc-last-event').textContent = 'never';
+      document.getElementById('gc-stat-events').textContent = '0';
+      document.getElementById('gc-stat-common').textContent = 'n/a';
+      document.getElementById('gc-stat-thesis').textContent = '0';
+    });
+    document.querySelectorAll('[data-event]').forEach(node => node.addEventListener('change', () => {}));
+
+    loadHistory();
+    connect();
+  </script>
+</body>
+</html>

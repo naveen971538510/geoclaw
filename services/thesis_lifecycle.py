@@ -3,6 +3,7 @@ from typing import Dict, List
 
 from config import DB_PATH
 from services.db_helpers import get_conn
+from services.event_bus import publish
 
 
 CONFIDENCE_FLOOR = 0.15
@@ -83,6 +84,7 @@ def decay_stale_theses(db_path=None) -> Dict:
             )
             superseded += 1
             _record_event(cur, row["thesis_key"], "stale", "Confidence decayed below the active floor.", new_conf, int(row["evidence_count"] or 0))
+            publish("thesis_superseded", {"thesis_key": str(row["thesis_key"] or "")[:80], "confidence": round(new_conf, 3)})
         else:
             cur.execute(
                 """
@@ -125,6 +127,7 @@ def promote_demote_theses(db_path=None) -> Dict:
         )
         promoted += 1
         _record_event(cur, row["thesis_key"], "strengthened", "Thesis promoted to confirmed by confidence and evidence.", float(row["confidence"] or 0.0), int(row["evidence_count"] or 0))
+        publish("thesis_confirmed", {"thesis_key": str(row["thesis_key"] or "")[:80], "confidence": round(float(row["confidence"] or 0.0), 3)})
 
     weakened_rows = cur.execute(
         """

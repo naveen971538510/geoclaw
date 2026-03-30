@@ -4,6 +4,7 @@ from typing import Dict
 
 from config import DB_PATH
 from services.db_helpers import get_conn
+from services.event_bus import publish
 from services.feed_manager import get_source_weight
 from services.llm_analyst import LLMAnalyst
 from services.logging_service import get_logger
@@ -170,6 +171,7 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
             evidence_weight = 1.0 / (1.0 + evidence_count * 0.1)
             adjusted_delta = float(delta or 0.0) * float(source_weight or 0.65) * float(recency_weight or 0.5) * evidence_weight
             new_conf = _clamp_confidence(old_conf + adjusted_delta)
+            emitted_confidence = new_conf
             old_velocity = float(existing_row.get("confidence_velocity", 0.0) or 0.0)
             new_velocity = 0.3 * (new_conf - old_conf) + 0.7 * old_velocity
             cur.execute(
@@ -205,6 +207,7 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
             evidence_weight = 1.0
             adjusted_delta = float(delta or 0.0) * float(source_weight or 0.65) * float(recency_weight or 0.5) * evidence_weight
             initial_conf = _clamp_confidence(old_conf + adjusted_delta)
+            emitted_confidence = initial_conf
             new_velocity = 0.3 * (initial_conf - old_conf)
             cur.execute(
                 """
@@ -294,6 +297,15 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50) -> Dict:
             VALUES (?, ?, ?, ?)
             """,
             (thesis_key, current_confidence, 0, now),
+        )
+        publish(
+            "thesis_updated",
+            {
+                "thesis_key": thesis_key[:80],
+                "old_confidence": round(float(old_conf or 0.0), 3),
+                "new_confidence": round(float(emitted_confidence or current_confidence or 0.0), 3),
+                "delta": round(float((emitted_confidence or current_confidence or 0.0) - float(old_conf or 0.0)), 3),
+            },
         )
         stats["chains_written"] += 1
 

@@ -30,6 +30,7 @@ from services.action_service import action_on_cooldown, evaluate_and_propose, li
 from services.briefing_service import generate_daily_briefing
 from services.calibration_service import get_penalty_multiplier, record_prediction
 from services.decision_service import create_decision, decision_metrics, list_decisions
+from services.event_bus import publish
 from services.evaluation_service import evaluate_previous_items
 from services.goal_service import ensure_agent_tables, generate_autonomous_goals, get_conn, list_goals, utc_now_iso
 from services.llm_service import analyse_contradiction_meta, new_llm_run_state, summarize_llm_run_state
@@ -354,6 +355,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     ensure_agent_tables()
     state = bump_real_agent_run()
     real_agent_runs = int(state.get("real_agent_runs", 0) or 0)
+    publish("agent_run_started", {"run_id": real_agent_runs})
     starting_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     seen_action_ids = set(starting_action_ids)
     step_results = {}
@@ -725,6 +727,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
                 live_state["briefing_last_run"] = str(briefing.get("generated_at", "") or utc_now_iso())
                 save_agent_state(live_state)
                 briefing_created = 1
+                publish("briefing_generated", {"run_id": _latest_agent_run_id(), "generated_at": briefing.get("generated_at", ""), "briefing_id": briefing.get("id", 0)})
         step_results["briefing"] = {"status": "ok", "created": briefing_created}
     except Exception as exc:
         logger.error("Step briefing failed: %s", exc, exc_info=True)
@@ -789,6 +792,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     }
     latest_run_id = _latest_agent_run_id()
     _journal(latest_run_id, "agent_loop", "Observed latest payload, wrote decisions/tasks, and re-checked prior thesis items.", metrics)
+    publish("agent_run_complete", {"run_id": latest_run_id or real_agent_runs, "metrics": metrics})
 
     return {
         "status": "ok",

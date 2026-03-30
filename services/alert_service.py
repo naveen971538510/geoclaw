@@ -266,6 +266,12 @@ class AlertService:
             self._send_email(title, body)
         if self.webhook_url:
             self._send_webhook(title, body)
+        try:
+            from services.event_bus import publish
+
+            publish("alert_fired", {"title": str(title or "")[:160], "alert_name": str(alert_name or "")[:120]})
+        except Exception:
+            pass
         logger.info("Alert fired: %s", alert_name)
         return True
 

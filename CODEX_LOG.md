@@ -1349,3 +1349,50 @@ Highlights:
 - plain-English query engine over theses, articles, actions, contradictions, regime, and calibration
 - dedicated `/ask` page with suggestions, follow-ups, and local history
 - terminal shortcut button plus mini inline ask bar
+
+## Night 5 — Phase 2
+
+Status: Real-time event stream complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/event_bus.py`
+- `/Users/naveenkumar/GeoClaw/ui/live.html`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/reasoning_pipeline.py`
+- `/Users/naveenkumar/GeoClaw/services/thesis_lifecycle.py`
+- `/Users/naveenkumar/GeoClaw/services/alert_service.py`
+- `/Users/naveenkumar/GeoClaw/services/action_service.py`
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+- `/Users/naveenkumar/GeoClaw/ui/contradictions.html`
+- `/Users/naveenkumar/GeoClaw/ui/watchlist.html`
+- `/Users/naveenkumar/GeoClaw/ui/agent_runs.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.js`
+- `/Users/naveenkumar/GeoClaw/ui/ask.html`
+
+Routes added:
+- `GET /live`
+- `GET /api/events/stream`
+- `GET /api/events/history`
+- `GET /api/events/types`
+
+Verification:
+- `python3 -m py_compile services/event_bus.py` ✓
+- `python3 -m py_compile services/reasoning_pipeline.py services/thesis_lifecycle.py services/alert_service.py services/action_service.py services/agent_loop_service.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/events/types` ✓
+- `curl -s http://127.0.0.1:8000/live` ✓
+- `/api/events/stream` heartbeat observed ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- thread-safe in-memory event bus with typed event history
+- SSE stream for browsers without needing WebSockets
+- live feed page with filtering, stats, and expandable JSON rows
+- terminal event counter and auto-refresh on important run events

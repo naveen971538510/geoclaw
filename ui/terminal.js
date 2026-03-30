@@ -63,6 +63,8 @@ let refreshTimer = null;
 let isRunningAgent = false;
 let isRunningRealAgent = false;
 let liveBarTimer = null;
+let gcEventCount = 0;
+let gcES = null;
 
 function latestAgentRun(){
   return ((state.agentStatus || {}).runs || [])[0] || {};
@@ -1658,6 +1660,40 @@ async function gcRunAgentNow(){
     }
   }
 }
+function gcInitEventStream(){
+  if (!window.EventSource) return;
+  if (gcES) return;
+  gcES = new EventSource('/api/events/stream');
+  gcES.onmessage = (payload) => {
+    try{
+      const ev = JSON.parse(payload.data);
+      if (ev.type === 'heartbeat') return;
+      gcEventCount += 1;
+      const countNode = document.getElementById('gc-event-count');
+      if (countNode) countNode.textContent = String(gcEventCount);
+      if (['thesis_confirmed', 'alert_fired', 'agent_run_complete'].includes(ev.type)){
+        const bar = document.getElementById('gc-live-bar');
+        if (bar){
+          bar.style.borderColor = '#3fb950';
+          setTimeout(() => { bar.style.borderColor = '#30363d'; }, 2000);
+        }
+        if (ev.type === 'agent_run_complete'){
+          setTimeout(() => {
+            if (typeof gcLoadTheses === 'function') gcLoadTheses();
+            if (typeof gcLoadAlerts === 'function') gcLoadAlerts();
+            gcUpdateLiveBar();
+          }, 1000);
+        }
+      }
+    }catch(err){}
+  };
+  gcES.onerror = () => {
+    const bar = document.getElementById('gc-live-text');
+    if (bar && !String(bar.textContent || '').includes('Status unavailable')){
+      bar.textContent = '⚠ Live event stream disconnected, retrying…';
+    }
+  };
+}
 function gcShowMiniAskAnswer(text, color){
   const box = document.getElementById('gc-mini-ask-answer');
   if (!box) return;
@@ -1870,6 +1906,7 @@ reloadAll();
 gcLoadPrices();
 gcLoadAlerts();
 gcUpdateLiveBar();
+gcInitEventStream();
 if (liveBarTimer) clearInterval(liveBarTimer);
 liveBarTimer = setInterval(gcUpdateLiveBar, 30000);
 setInterval(gcLoadPrices, 60000);

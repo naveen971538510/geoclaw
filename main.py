@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from fastapi.responses import HTMLResponse, Response, RedirectResponse, StreamingResponse
 from data import demo_articles
 from helpers import (
     filter_articles_by_field,
@@ -485,6 +485,13 @@ def geoclaw_ask_page():
     from services.terminal_ui_service import render_terminal_asset
 
     return HTMLResponse(render_terminal_asset("ask.html"))
+
+
+@app.get("/live", response_class=HTMLResponse)
+def geoclaw_live_page():
+    from services.terminal_ui_service import render_terminal_asset
+
+    return HTMLResponse(render_terminal_asset("live.html"))
 
 
 @app.get("/theses", response_class=HTMLResponse)
@@ -1441,6 +1448,69 @@ def api_ask_suggestions():
         return JSONResponse({"status": "ok", "suggestions": SUGGESTIONS})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/ask/suggestions", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/events/stream")
+async def api_events_stream(request: Request):
+    from services.event_bus import get_bus
+    import asyncio
+    import json as jsonlib
+    import queue as queue_module
+    import time as time_module
+
+    bus = get_bus()
+    subscriber = bus.subscribe("*")
+
+    async def generate():
+        last_heartbeat = time_module.time()
+        try:
+            for event in bus.get_history(10):
+                yield f"data: {jsonlib.dumps(event, default=str)}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = subscriber.get(timeout=1.0)
+                    yield f"data: {jsonlib.dumps(event, default=str)}\n\n"
+                except queue_module.Empty:
+                    now = time_module.time()
+                    if now - last_heartbeat >= 15:
+                        last_heartbeat = now
+                        yield f"data: {jsonlib.dumps({'type': 'heartbeat', 'timestamp': now})}\n\n"
+                await asyncio.sleep(0.05)
+        finally:
+            bus.unsubscribe(subscriber, "*")
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+@app.get("/api/events/history", response_class=JSONResponse)
+def api_events_history(limit: int = 50):
+    try:
+        from services.event_bus import get_bus
+
+        events = get_bus().get_history(limit=int(limit or 50))
+        return JSONResponse({"status": "ok", "events": events, "count": len(events)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/events/history", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/events/types", response_class=JSONResponse)
+def api_events_types():
+    try:
+        from services.event_bus import EVENT_TYPES
+
+        return JSONResponse({"status": "ok", "types": EVENT_TYPES})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/events/types", "error": str(exc)}, status_code=500)
 
 
 @app.get("/api/agent/status", response_class=JSONResponse)

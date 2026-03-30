@@ -9,6 +9,7 @@ from config import (
     ALLOW_AUTO_APPROVED_ACTIONS,
 )
 from services.goal_service import ensure_agent_tables, get_conn, utc_now_iso
+from services.event_bus import publish
 from services.thesis_service import get_thesis, get_thesis_detail, normalize_thesis_key, record_thesis_event
 
 
@@ -317,6 +318,15 @@ def propose_action(action_type, payload, thesis_key, confidence, evidence_count,
     conn.commit()
     conn.close()
     record_thesis_event(clean_key, "action_proposed", f"{clean_type} proposed ({status})", confidence_value, evidence_value)
+    publish(
+        "action_proposed",
+        {
+            "action_type": clean_type,
+            "thesis_key": clean_key[:80],
+            "status": status,
+            "confidence": round(confidence_value, 3),
+        },
+    )
     return _fetch_action(action_id)
 
 
@@ -353,6 +363,14 @@ def approve_action(action_id, approved_by) -> Dict:
     updated = _fetch_action(action_id)
     if updated:
         record_thesis_event(updated.get("thesis_key", ""), "action_approved", note, updated.get("confidence", 0.0), updated.get("evidence_count", 0))
+        publish(
+            "action_approved",
+            {
+                "action_type": updated.get("action_type", ""),
+                "thesis_key": str(updated.get("thesis_key", "") or "")[:80],
+                "status": updated.get("status", ""),
+            },
+        )
     return updated
 
 
