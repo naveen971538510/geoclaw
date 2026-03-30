@@ -63,6 +63,10 @@
     .mini-box .k{color:var(--muted);font-size:11px;text-transform:uppercase}
     .mini-box .v{font-size:18px;font-weight:700;margin-top:4px}
     .sparkline{width:100%;height:54px}
+    .geo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+    .geo-tile{border-radius:14px;padding:14px;border:1px solid var(--line);min-height:128px}
+    .geo-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .geo-score{font-size:28px;font-weight:800}
     @media (max-width: 960px){.two-col{grid-template-columns:1fr}}
   </style>
 </head>
@@ -119,6 +123,14 @@
       <div class="panel">
         <h2>Sentiment Drivers</h2>
         <div id="gc-sentiment-breakdown"><div class="skeleton"></div><div class="skeleton" style="margin-top:8px"></div></div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom:18px">
+      <h2>Geographic Risk Heatmap</h2>
+      <div id="gc-geo-risk" class="geo-grid">
+        <div class="skeleton" style="height:130px"></div>
+        <div class="skeleton" style="height:130px"></div>
       </div>
     </section>
 
@@ -359,6 +371,47 @@
         </div>
       `).join('');
     }
+    function renderGeoRisk(regions){
+      const el = document.getElementById('gc-geo-risk');
+      if (!el) return;
+      const items = Object.values(regions || {});
+      if (!items.length){
+        el.innerHTML = '<div class="muted">No geographic concentrations detected yet.</div>';
+        return;
+      }
+      const palette = {
+        CRITICAL: {bg:'rgba(248,81,73,0.15)', border:'#f85149'},
+        HIGH: {bg:'rgba(210,153,34,0.15)', border:'#d29922'},
+        MEDIUM: {bg:'rgba(88,166,255,0.15)', border:'#58a6ff'},
+        LOW: {bg:'rgba(63,185,80,0.15)', border:'#3fb950'}
+      };
+      el.innerHTML = items.map(item => {
+        const colors = palette[item.risk_level] || palette.MEDIUM;
+        const velocity = item.velocity_trend === 'rising' ? '↑' : (item.velocity_trend === 'falling' ? '↓' : '→');
+        return `
+          <div class="geo-tile" style="background:${colors.bg};border-color:${colors.border}">
+            <div class="geo-top">
+              <div>
+                <div style="font-weight:700;font-size:15px;">${esc(item.region)}</div>
+                <div class="muted" style="font-size:11px;">${esc(item.risk_level)} risk</div>
+              </div>
+              <div style="text-align:right">
+                <div class="geo-score">${Number(item.risk_score || 0)}</div>
+                <div class="muted" style="font-size:11px;">${velocity} ${esc(item.velocity_trend || 'stable')}</div>
+              </div>
+            </div>
+            <div style="margin-top:12px;font-size:12px;color:#c9d3df;">
+              ${esc((item.top_thesis || 'No dominant thesis').slice(0, 120))}
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#8b949e;">
+              <span>${Number(item.thesis_count || 0)} theses</span>
+              <span>${Number(item.article_count_24h || 0)} articles/24h</span>
+              <span>${Math.round(Number(item.avg_confidence || 0) * 100)}% avg conf</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -396,7 +449,7 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData, sentimentData, sentimentHistoryData, geoRiskData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
@@ -407,7 +460,8 @@
           fetchJson('/api/intelligence/calibration'),
           fetchJson('/api/calendar?days=7'),
           fetchJson('/api/sentiment/current'),
-          fetchJson('/api/sentiment/history?days=7')
+          fetchJson('/api/sentiment/history?days=7'),
+          fetchJson('/api/geo-risk')
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
@@ -437,6 +491,7 @@
         renderRegime(regimeData.regime || {});
         renderCalendar(calendarData.events || []);
         renderSentiment(sentimentData.index || {}, sentimentHistoryData.history || []);
+        renderGeoRisk(geoRiskData.regions || {});
         gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';
@@ -466,6 +521,7 @@
     loadDashboard();
     gcLoadTicker();
     setInterval(gcLoadTicker, 60000);
+    setInterval(loadDashboard, 300000);
   </script>
   <script>
     if ("serviceWorker" in navigator) {

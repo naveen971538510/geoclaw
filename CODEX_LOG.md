@@ -1853,3 +1853,29 @@ Highlights:
 - `agent-briefing/latest` now supports `trader`, `executive`, and `raw_json` output modes
 - the agent loop now writes a trader-format briefing after every real run instead of only once per day
 - the scheduler now reserves 07:00 UTC for executive delivery and 15:00 UTC for trader-format briefing generation, with status tracking for the latest scheduled briefing job
+
+## Night 5 — Phase 18
+
+Status: Geographic risk visualization complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/geo_risk.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+
+Routes added:
+- `GET /api/geo-risk`
+
+Verification:
+- `python3 -m py_compile services/geo_risk.py main.py` ✓
+- `python3 -c "open('ui/dashboard.html').read(); print('dashboard ok')"` ✓
+- `curl -s http://127.0.0.1:8000/api/geo-risk | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `105`
+
+Highlights:
+- GeoClaw now computes regional risk concentration directly from active theses and the last 24 hours of article flow
+- the dashboard includes a geographic heatmap tile grid with risk score, region-level velocity, and top-thesis context
+- dashboard auto-refresh now keeps the regional view current every five minutes alongside the existing ticker refresh

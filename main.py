@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from data import demo_articles
+from datetime import datetime, timezone
 from helpers import (
     filter_articles_by_field,
     search_articles_by_headline,
@@ -2065,6 +2066,17 @@ def api_sentiment_history(days: int = 30):
         return JSONResponse({"status": "ok", "history": history})
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/sentiment/history", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/geo-risk", response_class=JSONResponse)
+def api_geo_risk():
+    try:
+        from services.geo_risk import GeoRisk
+
+        regions = GeoRisk().compute_region_risk(str(DB_PATH))
+        return JSONResponse({"status": "ok", "regions": regions, "computed_at": datetime.now(timezone.utc).isoformat()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/geo-risk", "error": str(exc)}, status_code=500)
 
 
 @app.get("/source-health", response_class=JSONResponse)
