@@ -1,4 +1,4 @@
-.PHONY: install migrate start test smoke prices ingest reason brief log status compile clean ask cli-status cli-theses
+.PHONY: install migrate start test smoke prices ingest reason brief log status compile clean ask cli-status cli-theses autostart no-autostart service-status
 
 root   = /Users/naveenkumar/GeoClaw
 act    = source $(root)/venv/bin/activate &&
@@ -53,5 +53,14 @@ cli-status:
 
 cli-theses:
 	cd $(root) && $(act) python3 geoclaw_cli.py theses -n 10
+
+autostart:
+	launchctl load ~/Library/LaunchAgents/com.geoclaw.server.plist && echo "GeoClaw will start automatically on login"
+
+no-autostart:
+	launchctl unload ~/Library/LaunchAgents/com.geoclaw.server.plist && echo "Autostart disabled"
+
+service-status:
+	launchctl list | grep geoclaw || echo "GeoClaw not running as service"
 
 all: migrate compile test

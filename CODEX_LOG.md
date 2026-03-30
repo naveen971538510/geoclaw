@@ -1757,3 +1757,29 @@ Highlights:
 - the CLI works directly against the local database, so common workflows no longer require the web server to be open
 - operational targets were added to `Makefile` for `ask`, `cli-status`, and `cli-theses`
 - command output is schema-aware for the Night 4/5 tables, including `agent_briefings` and current thesis state
+
+## Night 5 — Phase 14
+
+Status: macOS launchd autostart complete
+
+Files created:
+- `/Users/naveenkumar/Library/LaunchAgents/com.geoclaw.server.plist`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/Makefile`
+
+Make targets added:
+- `make autostart`
+- `make no-autostart`
+- `make service-status`
+
+Verification:
+- `plutil -lint ~/Library/LaunchAgents/com.geoclaw.server.plist` ✓
+- `grep -n "autostart\\|no-autostart\\|service-status" Makefile` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- GeoClaw now has a ready-to-load launch agent for starting the local server automatically on macOS login
+- the launch agent points at the project virtualenv and writes stdout/stderr into the project log files
+- local operators can enable, disable, and inspect the service directly through `make` shortcuts
