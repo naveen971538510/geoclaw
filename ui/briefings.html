@@ -47,6 +47,7 @@
         <div class="actions">
           <button class="btn" id="gc-copy-btn">Copy</button>
           <button class="btn" id="gc-download-btn">Download .txt</button>
+          <button class="btn" id="gc-export-json-btn">Export JSON</button>
           <div class="muted" id="gc-brief-meta"></div>
         </div>
         <div id="gc-briefing-body" class="muted">Select a briefing.</div>
@@ -97,11 +98,10 @@
       try { await navigator.clipboard.writeText(gcRawText || ''); } catch (e) {}
     });
     document.getElementById('gc-download-btn').addEventListener('click', () => {
-      const blob = new Blob([gcRawText || ''], {type:'text/plain'});
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'geoclaw-brief-' + new Date().toISOString().slice(0,10) + '.txt';
-      a.click();
+      window.location = '/api/export/briefing.txt' + (gcSelected ? ('?id=' + encodeURIComponent(gcSelected)) : '');
+    });
+    document.getElementById('gc-export-json-btn').addEventListener('click', () => {
+      window.location = '/api/export/full.json';
     });
     loadHistory().catch(() => { document.getElementById('gc-brief-list').textContent = 'Could not load briefing history.'; });
   </script>

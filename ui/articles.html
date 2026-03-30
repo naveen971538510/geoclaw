@@ -64,6 +64,7 @@
         <option value="3" selected>3 days</option>
         <option value="7">7 days</option>
       </select>
+      <button class="btn" id="gc-export-articles">⬇ Export Articles CSV</button>
       <input id="gc-article-search" placeholder="Search headlines…">
     </div>
     <div class="panel">
@@ -163,6 +164,10 @@
     document.getElementById('gc-source-filter').addEventListener('change', () => { gcPage = 0; gcLoadArticles(); });
     document.getElementById('gc-days-filter').addEventListener('change', () => { gcPage = 0; gcLoadArticles(); });
     document.getElementById('gc-article-search').addEventListener('input', () => { gcPage = 0; gcLoadArticles(); });
+    document.getElementById('gc-export-articles').addEventListener('click', () => {
+      const days = document.getElementById('gc-days-filter')?.value || '7';
+      window.location = '/api/export/articles.csv?days=' + encodeURIComponent(days);
+    });
     document.getElementById('gc-prev').addEventListener('click', () => { gcPage = Math.max(0, gcPage - 1); gcLoadArticles(); });
     document.getElementById('gc-next').addEventListener('click', () => { if ((gcPage + 1) * gcPageSize < gcLastTotal) { gcPage += 1; gcLoadArticles(); } });
     gcLoadArticles().catch(() => { document.getElementById('gc-articles-wrap').innerHTML = '<div class="muted">Could not load articles.</div>'; });

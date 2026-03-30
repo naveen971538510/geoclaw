@@ -1619,3 +1619,36 @@ Highlights:
 - debate service now produces structured bull and bear arguments with LLM enhancement when available and rule-based fallback otherwise
 - thesis explorer drilldowns can render a side-by-side debate verdict block
 - terminal thesis drawer and drilldown overlay now expose the same debate workflow for fast operator review
+
+## Night 5 — Phase 10
+
+Status: Export system complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/exporter.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/articles.html`
+- `/Users/naveenkumar/GeoClaw/ui/briefings.html`
+
+Routes added:
+- `GET /api/export/theses.csv`
+- `GET /api/export/articles.csv`
+- `GET /api/export/briefing.txt`
+- `GET /api/export/full.json`
+- `GET /api/export/predictions.csv`
+
+Verification:
+- `python3 -m py_compile services/exporter.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/export/theses.csv | head -5` ✓
+- `curl -s http://127.0.0.1:8000/api/export/full.json | python3 -m json.tool` ✓
+- briefings page now exposes download and JSON export controls ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- export service now supports theses CSV, articles CSV, latest or selected briefing text, full JSON snapshots, and prediction CSV
+- exports are aligned to the live schema, including `agent_briefings` and article enrichment joins
+- theses, articles, and briefings pages now expose one-click download actions

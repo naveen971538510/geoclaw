@@ -1353,6 +1353,61 @@ def api_debate(thesis_key: str):
         return JSONResponse({"status": "error", "route": "/api/debate", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/export/theses.csv")
+def api_export_theses_csv():
+    try:
+        from services.exporter import Exporter
+
+        content = Exporter(str(DB_PATH)).export_theses_csv()
+        return Response(content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=geoclaw-theses.csv"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/export/theses.csv", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/export/articles.csv")
+def api_export_articles_csv(days: int = 7):
+    try:
+        from services.exporter import Exporter
+
+        content = Exporter(str(DB_PATH)).export_articles_csv(int(days or 7))
+        return Response(content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=geoclaw-articles.csv"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/export/articles.csv", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/export/briefing.txt")
+def api_export_briefing_txt(id: int = 0):
+    try:
+        from services.exporter import Exporter
+
+        content = Exporter(str(DB_PATH)).export_briefing_txt(int(id or 0) or None)
+        return Response(content, media_type="text/plain", headers={"Content-Disposition": "attachment; filename=geoclaw-briefing.txt"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/export/briefing.txt", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/export/full.json")
+def api_export_full_json():
+    try:
+        from services.exporter import Exporter
+
+        content = Exporter(str(DB_PATH)).export_full_json()
+        return Response(content, media_type="application/json", headers={"Content-Disposition": "attachment; filename=geoclaw-export.json"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/export/full.json", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/export/predictions.csv")
+def api_export_predictions_csv():
+    try:
+        from services.exporter import Exporter
+
+        content = Exporter(str(DB_PATH)).export_predictions_csv()
+        return Response(content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=geoclaw-predictions.csv"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/export/predictions.csv", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/contradictions", response_class=JSONResponse)
 def api_contradictions(resolved: int = 0, limit: int = 20):
     try:
