@@ -267,6 +267,14 @@ class AlertService:
         if self.webhook_url:
             self._send_webhook(title, body)
         try:
+            from services.telegram_bot import TelegramBot
+
+            telegram = TelegramBot(self.db_path)
+            if telegram.available():
+                telegram.send_alert(title, body)
+        except Exception:
+            pass
+        try:
             from services.event_bus import publish
 
             publish("alert_fired", {"title": str(title or "")[:160], "alert_name": str(alert_name or "")[:120]})

@@ -1652,3 +1652,32 @@ Highlights:
 - export service now supports theses CSV, articles CSV, latest or selected briefing text, full JSON snapshots, and prediction CSV
 - exports are aligned to the live schema, including `agent_briefings` and article enrichment joins
 - theses, articles, and briefings pages now expose one-click download actions
+
+## Night 5 — Phase 11
+
+Status: Telegram bot integration complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/telegram_bot.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/alert_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/.env.geoclaw.example`
+
+Routes added:
+- `POST /api/telegram/webhook`
+- `POST /api/telegram/send-brief`
+- `POST /api/telegram/test`
+
+Verification:
+- `python3 -m py_compile services/telegram_bot.py services/alert_service.py main.py` ✓
+- `curl -s -X POST http://127.0.0.1:8000/api/telegram/test | python3 -m json.tool` ✓
+- `curl -s -X POST http://127.0.0.1:8000/api/telegram/webhook -H 'Content-Type: application/json' -d '{"message":{"text":"/status","chat":{"id":"0"}}}' | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- Telegram service now supports outbound alerts, latest-brief delivery, command handling, and natural-language query responses
+- webhook routes are tolerant when credentials are absent, so the platform does not fail closed in local development
+- alert fanout now includes Telegram whenever bot credentials are configured

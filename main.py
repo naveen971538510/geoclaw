@@ -1408,6 +1408,43 @@ def api_export_predictions_csv():
         return JSONResponse({"status": "error", "route": "/api/export/predictions.csv", "error": str(exc)}, status_code=500)
 
 
+@app.post("/api/telegram/webhook", response_class=JSONResponse)
+async def api_telegram_webhook(request: Request):
+    try:
+        from services.telegram_bot import TelegramBot
+
+        update = await request.json()
+        response = TelegramBot(str(DB_PATH)).process_incoming(update if isinstance(update, dict) else {})
+        return JSONResponse({"status": "ok", "response": response})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/telegram/webhook", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/telegram/send-brief", response_class=JSONResponse)
+def api_telegram_send_brief(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.telegram_bot import TelegramBot
+
+        success = TelegramBot(str(DB_PATH)).send_briefing()
+        return JSONResponse({"status": "ok" if success else "error", "available": TelegramBot(str(DB_PATH)).available()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/telegram/send-brief", "error": str(exc)}, status_code=500)
+
+
+@app.post("/api/telegram/test", response_class=JSONResponse)
+def api_telegram_test(request: Request):
+    try:
+        _mutation_guard(request)
+        from services.telegram_bot import TelegramBot
+
+        bot = TelegramBot(str(DB_PATH))
+        success = bot.send_message("✅ GeoClaw Telegram bot is connected.")
+        return JSONResponse({"status": "ok" if success else "error", "available": bot.available()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/telegram/test", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/contradictions", response_class=JSONResponse)
 def api_contradictions(resolved: int = 0, limit: int = 20):
     try:
