@@ -56,7 +56,8 @@ const state = {
   operatorStateLoaded: false,
   currentThesisDetail: null,
   currentActionDetail: null,
-  currentDrilldown: null
+  currentDrilldown: null,
+  currentDebate: null
 };
 
 let refreshTimer = null;
@@ -830,9 +831,10 @@ async function openOverlay(section){
   if (section === 'drilldown'){
     const item = state.currentDrilldown || {};
     const thesis = item.thesis || {};
+    const debate = state.currentDebate && String((state.currentDebate || {}).thesis_key || '') === String(thesis.thesis_key || '') ? state.currentDebate : null;
     title.textContent = 'Why This Happened';
     subtitle.textContent = 'Trace the path from article to cluster to thesis to action/result.';
-    actions.innerHTML = thesis.thesis_key ? '<a class="textlink" href="/terminal/drilldown/' + encodePath(thesis.thesis_key) + '" target="_blank" rel="noopener noreferrer">Open raw drilldown</a>' : '';
+    actions.innerHTML = thesis.thesis_key ? '<a class="textlink" href="/terminal/drilldown/' + encodePath(thesis.thesis_key) + '" target="_blank" rel="noopener noreferrer">Open raw drilldown</a><button class="btn small" id="gcDrilldownDebateBtn">Bull vs Bear</button>' : '';
     body.innerHTML =
       panelCard('Thesis', thesis && (thesis.current_claim || thesis.thesis_key)
         ? '<div class="mini"><div class="mini-title">' + esc(thesis.title || thesis.current_claim || thesis.thesis_key || '') + '</div><div class="mini-copy">Status ' + esc(thesis.status || 'unknown') + ' · evidence ' + esc(String(thesis.evidence_count || 0)) + ' · contradictions ' + esc(String(thesis.contradiction_count || 0)) + '</div><div class="mini-copy">' + esc(thesis.last_update_reason || 'No update reason recorded.') + '</div></div>'
@@ -840,7 +842,21 @@ async function openOverlay(section){
       panelCard('Trace', '<div class="mini"><div class="mini-copy">Articles: ' + esc(String(((item.trace || {}).articles || []).length)) + ' · Clusters: ' + esc(String(((item.trace || {}).clusters || []).length)) + ' · Decisions: ' + esc(String((item.decisions || []).length)) + ' · Reasoning chains: ' + esc(String((item.reasoning || []).length)) + ' · Actions: ' + esc(String((item.actions || []).length)) + '</div></div>') +
       panelCard('Timeline', (item.timeline || []).length
         ? (item.timeline || []).slice(-12).map(event => '<div class="mini"><div class="mini-title">' + esc(event.event_type || 'event') + '</div><div class="mini-copy">' + esc(event.note || '') + '</div><div class="mini-copy">' + esc(event.created_at || '') + '</div></div>').join('')
-        : '<div class="mini"><div class="mini-copy">No thesis events recorded yet.</div></div>');
+        : '<div class="mini"><div class="mini-copy">No thesis events recorded yet.</div></div>') +
+      panelCard('Bull vs Bear', debate
+        ? '<div class="mini"><div class="mini-title" style="color:#8ff0b2">' + esc(((debate.bull || {}).persona || 'Bull')) + '</div><div class="mini-copy">' + esc((debate.bull || {}).argument || '') + '</div><div class="mini-copy">Key point: ' + esc((debate.bull || {}).key_point || '') + '</div></div>' +
+          '<div class="mini"><div class="mini-title" style="color:#ffb3b3">' + esc(((debate.bear || {}).persona || 'Bear')) + '</div><div class="mini-copy">' + esc((debate.bear || {}).argument || '') + '</div><div class="mini-copy">Key point: ' + esc((debate.bear || {}).key_point || '') + '</div></div>' +
+          '<div class="mini"><div class="mini-title">Verdict</div><div class="mini-copy">' + esc(debate.verdict || '') + '</div><div class="mini-copy">' + esc(debate.mode === 'llm' ? 'Powered by GeoClaw AI' : 'Rule-based fallback') + '</div></div>'
+        : '<div class="mini"><div class="mini-copy">Load a bull-vs-bear debate for this thesis.</div></div>');
+    setTimeout(() => {
+      const debateBtn = document.getElementById('gcDrilldownDebateBtn');
+      if (debateBtn && thesis.thesis_key){
+        debateBtn.addEventListener('click', async () => {
+          state.currentDebate = await fetchDebate(thesis.thesis_key);
+          openOverlay('drilldown');
+        });
+      }
+    }, 0);
     return;
   }
 
@@ -915,6 +931,10 @@ async function fetchDrilldown(thesisKey){
   const data = await fetchJson('/terminal/drilldown/' + encodePath(thesisKey));
   return (data || {}).item || {};
 }
+async function fetchDebate(thesisKey){
+  const data = await fetchJson('/api/debate/' + encodePath(thesisKey));
+  return (data || {}).debate || null;
+}
 async function fetchActionPreview(actionId){
   const data = await fetchJson('/agent-actions/' + String(actionId) + '/preview');
   return (data || {}).item || {};
@@ -968,13 +988,23 @@ function openThesisDrawer(detail, mode){
         '<div class="insight-box"><strong>Preview</strong><div class="article-copy" style="font-size:15px">' + esc(JSON.stringify(detail.preview || detail.payload || {}, null, 2)) + '</div></div>' +
       '</div>';
     foot.innerHTML = detail.thesis_key
-      ? '<button class="btn small" data-open-drilldown="' + esc(detail.thesis_key || '') + '">Why this happened</button>'
+      ? '<button class="btn small" data-open-drilldown="' + esc(detail.thesis_key || '') + '">Why this happened</button><button class="btn small" data-open-debate="' + esc(detail.thesis_key || '') + '">Bull vs Bear</button>'
       : '';
     setTimeout(() => {
       document.querySelectorAll('[data-open-drilldown]').forEach(node => {
         node.addEventListener('click', async () => {
           const item = await fetchDrilldown(node.getAttribute('data-open-drilldown'));
           state.currentDrilldown = item;
+          state.currentDebate = null;
+          closeThesisDrawer();
+          openOverlay('drilldown');
+        });
+      });
+      document.querySelectorAll('[data-open-debate]').forEach(node => {
+        node.addEventListener('click', async () => {
+          const thesisKey = node.getAttribute('data-open-debate');
+          state.currentDrilldown = await fetchDrilldown(thesisKey);
+          state.currentDebate = await fetchDebate(thesisKey);
           closeThesisDrawer();
           openOverlay('drilldown');
         });
@@ -1005,6 +1035,7 @@ function openThesisDrawer(detail, mode){
     '</div>';
   foot.innerHTML =
     '<button class="btn small" data-open-drilldown="' + esc(detail.thesis_key || '') + '">Why this happened</button>' +
+    '<button class="btn small" data-open-debate="' + esc(detail.thesis_key || '') + '">Bull vs Bear</button>' +
     '<button class="btn small" data-propose-action="email_summary" data-thesis-key="' + esc(detail.thesis_key || '') + '">Propose email</button>' +
     '<button class="btn small" data-propose-action="slack_payload" data-thesis-key="' + esc(detail.thesis_key || '') + '">Propose Slack</button>' +
     '<button class="btn small" data-propose-action="webhook" data-thesis-key="' + esc(detail.thesis_key || '') + '">Propose webhook</button>';
@@ -1013,6 +1044,16 @@ function openThesisDrawer(detail, mode){
       node.addEventListener('click', async () => {
         const item = await fetchDrilldown(node.getAttribute('data-open-drilldown'));
         state.currentDrilldown = item;
+        state.currentDebate = null;
+        closeThesisDrawer();
+        openOverlay('drilldown');
+      });
+    });
+    document.querySelectorAll('[data-open-debate]').forEach(node => {
+      node.addEventListener('click', async () => {
+        const thesisKey = node.getAttribute('data-open-debate');
+        state.currentDrilldown = await fetchDrilldown(thesisKey);
+        state.currentDebate = await fetchDebate(thesisKey);
         closeThesisDrawer();
         openOverlay('drilldown');
       });

@@ -1337,6 +1337,22 @@ def api_portfolio_refresh_prices(request: Request):
         return JSONResponse({"status": "error", "route": "/api/portfolio/refresh-prices", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/debate/{thesis_key:path}", response_class=JSONResponse)
+def api_debate(thesis_key: str):
+    try:
+        from services.debate_engine import DebateEngine
+
+        llm = None
+        if OPENAI_API_KEY:
+            from services.llm_analyst import LLMAnalyst
+
+            llm = LLMAnalyst(str(DB_PATH))
+        debate = DebateEngine(str(DB_PATH), llm_analyst=llm).debate_thesis(thesis_key)
+        return JSONResponse({"status": "ok", "debate": debate})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/debate", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/contradictions", response_class=JSONResponse)
 def api_contradictions(resolved: int = 0, limit: int = 20):
     try:

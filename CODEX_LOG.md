@@ -1591,3 +1591,31 @@ Highlights:
 - new position tracker with open-position summary, P&L calculation, and close-position workflow
 - threat radar ties open positions back to active HIGH-risk theses
 - consistent Portfolio nav entry added across the existing UI pages
+
+## Night 5 — Phase 9
+
+Status: Bull vs Bear debate engine complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/debate_engine.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/theses.html`
+- `/Users/naveenkumar/GeoClaw/ui/terminal.js`
+
+Routes added:
+- `GET /api/debate/{thesis_key}`
+
+Verification:
+- `python3 -m py_compile services/debate_engine.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/debate/<top-thesis>` ✓
+- theses page now exposes Bull vs Bear debate actions ✓
+- terminal drilldown now supports Bull vs Bear loading ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- debate service now produces structured bull and bear arguments with LLM enhancement when available and rule-based fallback otherwise
+- thesis explorer drilldowns can render a side-by-side debate verdict block
+- terminal thesis drawer and drilldown overlay now expose the same debate workflow for fast operator review

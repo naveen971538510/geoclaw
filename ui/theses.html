@@ -82,6 +82,7 @@
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     let gcAllTheses = [];
     let gcExpanded = '';
+    const gcDebates = {};
     const pct = (v) => Math.round(Number(v || 0) * 100);
     const velArrow = (v) => Number(v || 0) > 0.02 ? '<span style="color:#2fb171">↑</span>' : (Number(v || 0) < -0.02 ? '<span style="color:#d95c5c">↓</span>' : '<span style="color:#90a0b7">→</span>');
     const barColor = (v) => Number(v || 0) >= 0.75 ? 'var(--green)' : (Number(v || 0) >= 0.45 ? 'var(--yellow)' : 'var(--red)');
@@ -122,6 +123,7 @@
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" onclick="gcToggleDrilldown(${JSON.stringify(String(t.thesis_key || ''))})">🔍 Why this happened</button>
           <button class="btn" onclick="gcToggleDrilldown(${JSON.stringify(String(t.thesis_key || ''))}, true)">📈 Related prices</button>
+          <button class="btn" onclick="gcOpenDebate(${JSON.stringify(String(t.thesis_key || ''))})">⚡ Bull vs Bear</button>
         </div>
         ${isOpen ? `<div class="drill" id="drill-${esc(t.thesis_key || '')}">Loading drilldown…</div>` : ''}
       </div>`;
@@ -167,17 +169,63 @@
           const pred = await fetch('/api/predictions?limit=10&thesis_key=' + encodeURIComponent(thesisKey)).then(r => r.json());
           predictions = pred.predictions || [];
         } catch (e) {}
+        const debate = gcDebates[thesisKey] || null;
         const resolvedPredictions = predictions.filter(p => String(p.outcome || 'pending') !== 'pending');
         const verifiedPredictions = resolvedPredictions.filter(p => String(p.outcome || '') === 'verified').length;
         const thesisAccuracy = resolvedPredictions.length ? Math.round((verifiedPredictions / resolvedPredictions.length) * 100) : null;
         holder.innerHTML = `${!pricesOnly ? `<div><strong>Articles</strong><div class="muted">${(drill.trace?.articles || []).map(a => esc(a.headline || a.title || '')).join(' · ') || 'No linked article trace yet.'}</div></div>
           <div style="margin-top:10px"><strong>Reasoning</strong><div class="muted">${(drill.reasoning || []).map(r => ((r.chain || []).map(h => `${h.hop}. ${h.from} → ${h.to}`).join(' | '))).join('<br>') || 'No reasoning chain yet.'}</div></div>
           <div style="margin-top:10px"><strong>Actions</strong><div class="muted">${(drill.actions || []).map(a => esc(`${a.action_type || 'action'} · ${a.status || ''}`)).join(' · ') || 'No linked actions.'}</div></div>
-          <div style="margin-top:10px"><strong>Predictions</strong><div class="muted">${predictions.length ? predictions.map(p => `${esc(p.symbol || 'n/a')} · ${esc(p.predicted_direction || 'n/a')} · ${esc(p.outcome || 'pending')} · ${p.actual_change_pct == null ? 'n/a' : `${Number(p.actual_change_pct).toFixed(2)}%`}`).join('<br>') : 'No tracked predictions yet.'}</div>${thesisAccuracy == null ? '' : `<div class="muted" style="margin-top:6px">Prediction accuracy for this thesis: ${thesisAccuracy}%</div>`}</div>` : ''}
+          <div style="margin-top:10px"><strong>Predictions</strong><div class="muted">${predictions.length ? predictions.map(p => `${esc(p.symbol || 'n/a')} · ${esc(p.predicted_direction || 'n/a')} · ${esc(p.outcome || 'pending')} · ${p.actual_change_pct == null ? 'n/a' : `${Number(p.actual_change_pct).toFixed(2)}%`}`).join('<br>') : 'No tracked predictions yet.'}</div>${thesisAccuracy == null ? '' : `<div class="muted" style="margin-top:6px">Prediction accuracy for this thesis: ${thesisAccuracy}%</div>`}</div>
+          ${debate ? gcDebateHTML(debate) : ''}` : ''}
           <div style="margin-top:10px"><strong>📈 Related prices</strong><div class="prices">${prices.length ? prices.map(p => `<div class="price"><div><strong>${esc(p.symbol)}</strong></div><div>${p.price == null ? '—' : Number(p.price).toLocaleString(undefined,{maximumFractionDigits:2})}</div><div class="muted">${Number(p.change_pct || 0) >= 0 ? '+' : ''}${Number(p.change_pct || 0).toFixed(2)}%</div></div>`).join('') : '<div class="muted">Price feed unavailable.</div>'}</div></div>`;
       } catch (e) {
         holder.innerHTML = '<div class="muted">Could not load drilldown.</div>';
       }
+    }
+    function gcDebateHTML(debate){
+      const powered = debate.mode === 'llm' ? 'Powered by GeoClaw AI' : 'Rule-based fallback';
+      return `<div style="margin-top:10px">
+        <strong>⚡ Bull vs Bear</strong>
+        <div class="muted" style="margin-top:4px">${esc(powered)}</div>
+        <div class="meta" style="margin-top:10px">
+          <div class="box" style="border-color:rgba(47,177,113,.35)">
+            <strong style="color:#8ff0b2">${esc((debate.bull || {}).persona || 'Bull')}</strong>
+            <div class="muted" style="margin-top:6px">${esc((debate.bull || {}).argument || '')}</div>
+            <div class="pill" style="margin-left:0;margin-top:8px">${esc((debate.bull || {}).key_point || '')}</div>
+          </div>
+          <div class="box" style="border-color:rgba(217,92,92,.35)">
+            <strong style="color:#ffb3b3">${esc((debate.bear || {}).persona || 'Bear')}</strong>
+            <div class="muted" style="margin-top:6px">${esc((debate.bear || {}).argument || '')}</div>
+            <div class="pill" style="margin-left:0;margin-top:8px">${esc((debate.bear || {}).key_point || '')}</div>
+          </div>
+        </div>
+        <div class="box" style="margin-top:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px">
+          <strong>Verdict</strong>
+          <div class="muted" style="margin-top:4px">${esc(debate.verdict || '')}</div>
+        </div>
+      </div>`;
+    }
+    async function gcOpenDebate(thesisKey){
+      if (!thesisKey) return;
+      gcExpanded = thesisKey;
+      gcRenderTheses();
+      if (!gcDebates[thesisKey]) {
+        try {
+          const result = await fetch('/api/debate/' + encodeURIComponent(thesisKey)).then(r => r.json());
+          gcDebates[thesisKey] = result.debate || null;
+        } catch (e) {
+          gcDebates[thesisKey] = {
+            mode: 'rule_based',
+            bull: {persona: 'Bull', argument: 'Could not load debate.', key_point: 'Unavailable'},
+            bear: {persona: 'Bear', argument: 'Could not load debate.', key_point: 'Unavailable'},
+            verdict: 'Debate unavailable.'
+          };
+        }
+      } else {
+        delete gcDebates[thesisKey];
+      }
+      gcRenderDrilldown(thesisKey);
     }
     document.querySelectorAll('.gc-tab').forEach(btn => btn.addEventListener('click', () => {
       document.querySelectorAll('.gc-tab').forEach(x => x.classList.remove('active'));
