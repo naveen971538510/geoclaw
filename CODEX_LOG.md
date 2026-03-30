@@ -1956,3 +1956,65 @@ Highlights:
 - GeoClaw now flags unusual confidence spikes, contradiction storms, high-risk clustering, and article-volume surges
 - high-severity anomalies flow into both the event bus and the alert system during live agent runs
 - the dashboard exposes a top-of-page anomaly strip that stays hidden when the system is calm
+
+## Night 5 — 10x Complete
+
+### What was built tonight
+Phase 1: Natural language query engine (`/ask` page)
+Phase 2: Real-time SSE event stream (`/live` page)
+Phase 3: Price confirmation loop (prediction tracking)
+Phase 4: Thesis deduplication + merging
+Phase 5: Source reliability self-learning
+Phase 6: Macro economic calendar
+Phase 7: Daily Fear & Greed sentiment index
+Phase 8: Portfolio tracker + thesis threat radar
+Phase 9: LLM Bull vs Bear debate engine
+Phase 10: Export system (CSV/JSON/TXT download)
+Phase 11: Telegram bot (brief/alert/query)
+Phase 12: Progressive Web App (installable on phone)
+Phase 13: Full CLI tool (`geoclaw_cli.py`)
+Phase 14: macOS launchd auto-start
+Phase 15: 100+ test suite
+Phase 16: Route audit + smoke test update
+Phase 17: Multi-format briefings + scheduled delivery
+Phase 18: Geographic risk heatmap
+Phase 19: Sector rotation signals
+Phase 20: Cross-asset correlation engine
+Phase 21: Anomaly detection
+Phase 22: Final verification
+
+### System totals after Night 5
+- Major UI pages: 11 (`Dashboard`, `Terminal`, `Ask`, `Live`, `Theses`, `Articles`, `Briefings`, `Contradictions`, `Watchlist`, `Portfolio`, `Agent Runs`)
+- Route decorators in `main.py`: 132
+- Tables: 30
+- Tests: 105 unit tests passing
+- Service modules: 65 Python files in `services/`
+
+### Final verification
+- `python3 -m py_compile services/agent_loop_service.py` ✓ after final metrics aggregation fix
+- full compile sweep completed with zero Python syntax errors
+- `python3 -m unittest discover -s tests -v` ✓ (`105` passing)
+- `python3 tests/smoke_test.py` ✓ (`55/55` routes passing)
+- latest persisted live run: `run_id 665`
+- latest journal row: `id 99`, `run_id 665`
+- latest journal metrics:
+  - `reasoning_chains_built=8`
+  - `action_proposals_created=1`
+  - `prices_captured=17`
+  - `anomalies_detected=0`
+  - `sentiment_index=63.8`
+  - `sentiment_label=Greed`
+  - `duration_seconds=57.062`
+
+### Notes
+- A final Night 5 metrics aggregation fix was applied so `thesis_updates` counts reasoning-pipeline thesis updates correctly in future runs.
+- During verification, overlapping live runs briefly caused SQLite lock warnings; the final persisted verification was captured from a clean completed run and the server was restarted afterward.
+
+### Morning commands
+python3 geoclaw_cli.py status
+make start
+make once
+python3 geoclaw_cli.py ask what is the risk right now
+open http://127.0.0.1:8000/dashboard
+open http://127.0.0.1:8000/ask
+open http://127.0.0.1:8000/live

@@ -109,5 +109,39 @@
       });
     }
   </script>
+  <script>
+    (() => {
+      if (document.getElementById('gc-nav-shell-style')) return;
+      const nav = document.querySelector('nav');
+      if (!nav) return;
+      const brand = nav.querySelector('strong');
+      const links = Array.from(nav.querySelectorAll('.gc-nav-link')).map(link => link.outerHTML).join('');
+      if (!links) return;
+      const style = document.createElement('style');
+      style.id = 'gc-nav-shell-style';
+      style.textContent = `
+        nav{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid #263244;background:#0d131c;position:sticky;top:0;z-index:20}
+        .gc-nav-desktop{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+        .gc-nav-mobile{display:none;margin-left:auto}
+        .gc-nav-mobile summary{list-style:none;cursor:pointer;color:#e6edf3;border:1px solid #263244;border-radius:10px;padding:8px 12px;background:#111826}
+        .gc-nav-mobile summary::-webkit-details-marker{display:none}
+        .gc-nav-mobile-links{display:flex;flex-direction:column;gap:10px;padding:12px 0 0}
+        @media (max-width: 860px){
+          .gc-nav-desktop{display:none}
+          .gc-nav-mobile{display:block}
+        }
+      `;
+      document.head.appendChild(style);
+      nav.innerHTML = `${brand ? brand.outerHTML : '<strong style="color:#fff">GeoClaw</strong>'}<div class="gc-nav-desktop">${links}</div><details class="gc-nav-mobile"><summary>Menu</summary><div class="gc-nav-mobile-links">${links}</div></details>`;
+      document.querySelectorAll('.gc-nav-link').forEach(a => {
+        const active = a.getAttribute('href') === window.location.pathname;
+        a.style.color = active ? '#e6edf3' : '#8b949e';
+        a.style.fontWeight = active ? '600' : '400';
+        a.style.borderBottom = active ? '2px solid #e6edf3' : '2px solid transparent';
+        a.style.paddingBottom = '2px';
+        a.style.textDecoration = 'none';
+      });
+    })();
+  </script>
 </body>
 </html>

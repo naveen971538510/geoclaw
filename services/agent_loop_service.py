@@ -784,6 +784,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
 
     decision_counts = Counter(str(d.get("decision_type", "") or "") for d in decisions)
     duration_seconds = round(max(0.0, time.time() - started), 3)
+    pipeline_thesis_updates = int(reasoning_pipeline_stats.get("theses_updated", 0) or 0)
     metrics = {
         "items_fetched": int(ingestion.get("items_fetched", 0) or 0),
         "items_kept": int(ingestion.get("items_kept", 0) or 0),
@@ -824,11 +825,13 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "db_touched_counts": {
             "decisions": len(decisions),
             "tasks": len(tasks),
-            "theses": thesis_upserts + thesis_confidence_updates,
+            "theses": thesis_upserts + thesis_confidence_updates + pipeline_thesis_updates,
             "journal": 1,
         },
         "thesis_updates": {
-            "upserts": thesis_upserts,
+            "upserts": thesis_upserts + pipeline_thesis_updates,
+            "pipeline_updates": pipeline_thesis_updates,
+            "decision_loop_upserts": thesis_upserts,
             "confidence_updates": thesis_confidence_updates,
             "touched": sorted([key for key in thesis_keys_touched if key])[:20],
         },

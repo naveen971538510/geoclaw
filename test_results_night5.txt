@@ -1,0 +1,127 @@
+/Users/naveenkumar/GeoClaw/venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+test_action_approved_event_recorded (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_policy_auto_approves_high_confidence (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_policy_blocks_low_confidence (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_action_rejected_event_recorded (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_approve_action_sets_status_and_audit_note (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_reasoning_chain_returns_required_fields_in_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_thesis_claim_fallback_title_derived_from_headline (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_build_thesis_claim_missing_key_fallback_has_required_fields (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_calibration_penalty_fires_after_three_wrong_predictions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_can_auto_approve_threshold (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_cluster_dedupe (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_contradiction_flow (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_decision_dedupe (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_duplicate_source_penalty_after_three_contributions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_evaluate_and_propose_creates_alert_proposal (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_evaluate_and_propose_does_not_duplicate_same_thesis_action (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_generate_autonomous_goals_avoids_duplicate_titles (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_generate_daily_briefing_runs_when_tables_empty (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_calibration_score_returns_f_when_accuracy_below_point_four (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_thesis_detail_returns_required_fields (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_get_thesis_timeline_returns_chronological_order (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_migration_idempotency (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_missing_key_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_propose_action_saves_proposed_without_execution (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_recency_weight_recent_vs_old (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_record_prediction_stores_row_correctly (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_record_thesis_event_inserts_row (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_reflection_records_lesson_for_wrong_decision (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_reject_action_sets_status (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_repeated_run_stability (test_agent_intelligence.GeoClawAgentTests) ... 2026-03-30 08:11:26,069 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:27,435 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:28,680 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:29,915 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:31,198 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:32,463 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:33,696 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:35,325 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:37,405 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+2026-03-30 08:11:38,858 INFO geoclaw.agent_loop Deduplication merged 0 thesis pairs
+ok
+test_research_thesis_generates_three_queries_in_fallback (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_research_thesis_handles_no_articles_found (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_run_reflection_handles_empty_decisions (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_task_closure (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_drilldown_returns_trace (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_payload_compatibility (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_terminal_summary_and_diff_helpers (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_update_thesis_confidence_source_weight_known_vs_unknown (test_agent_intelligence.GeoClawAgentTests) ... ok
+test_cooldown_blocks_repeat (test_alert_service.TestAlertService) ... ok
+test_cooldown_ok_when_no_history (test_alert_service.TestAlertService) ... ok
+test_evaluate_theses_returns_count (test_alert_service.TestAlertService) ... 2026-03-30 08:11:40,628 INFO geoclaw.alerts Alert fired: high_confidence_thesis_1
+2026-03-30 08:11:40,738 INFO geoclaw.alerts Alert fired: confirmed_thesis_1
+ok
+test_log_alert_writes_to_db (test_alert_service.TestAlertService) ... ok
+test_bear_skeptical_framing (test_debate_engine.TestDebateEngine) ... ok
+test_bull_positive_framing (test_debate_engine.TestDebateEngine) ... ok
+test_debate_returns_bull_and_bear (test_debate_engine.TestDebateEngine) ... ok
+test_debate_returns_verdict (test_debate_engine.TestDebateEngine) ... ok
+test_debate_rule_fallback_no_llm (test_debate_engine.TestDebateEngine) ... ok
+test_debate_unknown_thesis_returns_error (test_debate_engine.TestDebateEngine) ... ok
+test_low_confidence_thesis_can_favor_bear (test_debate_engine.TestDebateEngine) ... ok
+test_export_articles_csv_has_header (test_exporter.TestExporter) ... ok
+test_export_briefing_txt_returns_string (test_exporter.TestExporter) ... ok
+test_export_empty_db_graceful (test_exporter.TestExporter) ... ok
+test_export_full_json_valid_json (test_exporter.TestExporter) ... ok
+test_export_predictions_csv_has_outcome_rows (test_exporter.TestExporter) ... ok
+test_export_theses_csv_valid_csv (test_exporter.TestExporter) ... ok
+test_calendar_brief_is_string (test_macro_calendar.TestMacroCalendar) ... ok
+test_days_ahead_filter_respected (test_macro_calendar.TestMacroCalendar) ... ok
+test_events_have_required_fields (test_macro_calendar.TestMacroCalendar) ... ok
+test_get_upcoming_returns_list (test_macro_calendar.TestMacroCalendar) ... ok
+test_high_impact_filter_works (test_macro_calendar.TestMacroCalendar) ... ok
+test_today_events_have_short_horizon (test_macro_calendar.TestMacroCalendar) ... ok
+test_crisis_regime_high_risk_theses (test_pattern_detector.TestPatternDetector) ... ok
+test_empty_theses_returns_neutral (test_pattern_detector.TestPatternDetector) ... ok
+test_narrative_clustering_returns_list (test_pattern_detector.TestPatternDetector) ... ok
+test_narratives_sorted_by_confidence (test_pattern_detector.TestPatternDetector) ... ok
+test_neutral_regime_low_conf (test_pattern_detector.TestPatternDetector) ... ok
+test_accuracy_report_structure (test_prediction_tracker.TestPredictionTracker) ... ok
+test_check_pending_returns_dict (test_prediction_tracker.TestPredictionTracker) ... ok
+test_low_confidence_no_prediction (test_prediction_tracker.TestPredictionTracker) ... ok
+test_outcome_enum_valid (test_prediction_tracker.TestPredictionTracker) ... ok
+test_record_high_confidence_creates_prediction (test_prediction_tracker.TestPredictionTracker) ... ok
+test_risk_down_prediction_can_verify_negative_move (test_prediction_tracker.TestPredictionTracker) ... ok
+test_unknown_keyword_no_prediction (test_prediction_tracker.TestPredictionTracker) ... ok
+test_all_patterns_match_correctly (test_query_engine.TestQueryEngine) ... ok
+test_answer_always_string (test_query_engine.TestQueryEngine) ... ok
+test_ask_oil_question_returns_answer (test_query_engine.TestQueryEngine) ... ok
+test_ask_regime_returns_dict (test_query_engine.TestQueryEngine) ... ok
+test_ask_top_theses_returns_list (test_query_engine.TestQueryEngine) ... ok
+test_ask_unknown_returns_fallback (test_query_engine.TestQueryEngine) ... ok
+test_confidence_in_0_1_range (test_query_engine.TestQueryEngine) ... ok
+test_country_question_returns_country_data (test_query_engine.TestQueryEngine) ... ok
+test_followup_suggestions_always_returned (test_query_engine.TestQueryEngine) ... ok
+test_all_articles_produce_thesis_key (test_rule_engine.TestRuleEngine) ... ok
+test_ceasefire_negative_delta (test_rule_engine.TestRuleEngine) ... ok
+test_chain_always_has_2_hops (test_rule_engine.TestRuleEngine) ... ok
+test_chain_hops_have_required_fields (test_rule_engine.TestRuleEngine) ... ok
+test_delta_always_clamped (test_rule_engine.TestRuleEngine) ... ok
+test_fed_produces_non_zero_delta (test_rule_engine.TestRuleEngine) ... ok
+test_iran_missile_high_delta (test_rule_engine.TestRuleEngine) ... ok
+test_neutral_article_fallback (test_rule_engine.TestRuleEngine) ... ok
+test_recession_positive_risk_delta (test_rule_engine.TestRuleEngine) ... ok
+test_terminal_risk_levels (test_rule_engine.TestRuleEngine) ... ok
+test_watchlist_suggestion_oil (test_rule_engine.TestRuleEngine) ... ok
+test_components_include_expected_keys (test_sentiment_index.TestSentimentIndex) ... ok
+test_compute_returns_score_0_to_100 (test_sentiment_index.TestSentimentIndex) ... ok
+test_extreme_fear_with_many_high_risk (test_sentiment_index.TestSentimentIndex) ... ok
+test_greed_with_positive_articles (test_sentiment_index.TestSentimentIndex) ... ok
+test_label_matches_score_range (test_sentiment_index.TestSentimentIndex) ... ok
+test_save_daily_score_and_history (test_sentiment_index.TestSentimentIndex) ... ok
+test_different_texts_low_similarity (test_thesis_deduplicator.TestThesisDeduplicator) ... ok
+test_find_duplicates_returns_list (test_thesis_deduplicator.TestThesisDeduplicator) ... ok
+test_identical_texts_high_similarity (test_thesis_deduplicator.TestThesisDeduplicator) ... ok
+test_merge_dry_run_no_db_change (test_thesis_deduplicator.TestThesisDeduplicator) ... 2026-03-30 08:11:41,058 INFO geoclaw.dedup Merging duplicate thesis 'Missile threats raise Iran oil supply risk' into 'Iran oil supply risk rises after missile threats' (sim=0.702)
+ok
+test_merge_supersedes_weaker_thesis (test_thesis_deduplicator.TestThesisDeduplicator) ... 2026-03-30 08:11:41,065 INFO geoclaw.dedup Merging duplicate thesis 'Missile threats raise Iran oil supply risk' into 'Iran oil supply risk rises after missile threats' (sim=0.702)
+ok
+test_merge_updates_reasoning_chain_target (test_thesis_deduplicator.TestThesisDeduplicator) ... 2026-03-30 08:11:41,078 INFO geoclaw.dedup Merging duplicate thesis 'Missile threats raise Iran oil supply risk' into 'Iran oil supply risk rises after missile threats' (sim=0.702)
+ok
+
+----------------------------------------------------------------------
+Ran 105 tests in 24.529s
+
+OK
