@@ -1487,3 +1487,32 @@ Highlights:
 - learnable source reliability table with seeded baseline credibility
 - EMA-style score updates from verified vs refuted price predictions
 - reasoning pipeline now prefers learned source weights and falls back safely to the static map
+
+## Night 5 — Phase 6
+
+Status: Macro economic calendar complete
+
+Files created:
+- `/Users/naveenkumar/GeoClaw/services/macro_calendar.py`
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/briefing_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+- `/Users/naveenkumar/GeoClaw/ui/dashboard.html`
+
+Routes added:
+- `GET /api/calendar`
+- `GET /api/calendar/today`
+- `GET /api/calendar/high-impact`
+
+Verification:
+- `python3 -m py_compile services/macro_calendar.py services/briefing_service.py main.py` ✓
+- `curl -s http://127.0.0.1:8000/api/calendar` ✓
+- dashboard calendar widget loads from live route ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `58`
+
+Highlights:
+- deterministic macro calendar service for recurring US, Europe, UK, China, and commodity events
+- briefing output now includes a macro calendar section for the next seven days
+- dashboard now surfaces upcoming high-impact macro events in a dedicated widget

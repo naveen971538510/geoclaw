@@ -1796,6 +1796,39 @@ def api_sources_learn(request: Request):
         return JSONResponse({"status": "error", "route": "/api/sources/learn", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/calendar", response_class=JSONResponse)
+def api_calendar(days: int = 7):
+    try:
+        from services.macro_calendar import MacroCalendar
+
+        events = MacroCalendar().get_upcoming(int(days or 7))
+        return JSONResponse({"status": "ok", "events": events, "count": len(events)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/calendar", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/calendar/today", response_class=JSONResponse)
+def api_calendar_today():
+    try:
+        from services.macro_calendar import MacroCalendar
+
+        events = MacroCalendar().get_today_events()
+        return JSONResponse({"status": "ok", "events": events})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/calendar/today", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/calendar/high-impact", response_class=JSONResponse)
+def api_calendar_high_impact():
+    try:
+        from services.macro_calendar import MacroCalendar
+
+        events = MacroCalendar().get_high_impact_upcoming()
+        return JSONResponse({"status": "ok", "events": events})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "route": "/api/calendar/high-impact", "error": str(exc)}, status_code=500)
+
+
 @app.get("/source-health", response_class=JSONResponse)
 def source_health():
     try:

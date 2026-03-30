@@ -4,10 +4,11 @@ from typing import Dict, List
 
 from services.goal_service import ensure_agent_tables, get_conn, utc_now_iso
 from services.llm_service import analyse_custom_text
+from services.macro_calendar import MacroCalendar
 from services.reasoning_service import list_reasoning_chains
 
 
-def _fallback_briefing(theses, contradictions, chains, actions) -> str:
+def _fallback_briefing(theses, contradictions, chains, actions, calendar_brief: str = "") -> str:
     ts = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
     lines = [f"## GeoClaw Intelligence Brief — {ts}", ""]
     lines.append("### Top developing stories")
@@ -38,6 +39,12 @@ def _fallback_briefing(theses, contradictions, chains, actions) -> str:
             lines.append(f"- {action.get('action_type', '')}: {action.get('thesis_key', '') or action.get('status', '')}")
     else:
         lines.append("- No new operator action proposals are pending right now.")
+    lines.append("")
+    lines.append("### Macro Calendar")
+    if calendar_brief:
+        lines.extend([line for line in str(calendar_brief or "").splitlines() if line and not line.startswith("### ")])
+    else:
+        lines.append("- No major macro events in the next 7 days.")
     lines.append("")
     lines.append("### What to watch tomorrow")
     if theses:
@@ -104,8 +111,9 @@ def generate_daily_briefing(db=None, run_id: int = None) -> Dict:
         """
     )
     calibration = [dict(row) for row in cur.fetchall()]
+    calendar_brief = MacroCalendar().generate_calendar_brief()
 
-    fallback_text = _fallback_briefing(theses, contradictions, chains, actions)
+    fallback_text = _fallback_briefing(theses, contradictions, chains, actions, calendar_brief=calendar_brief)
     system_text = (
         "You are a senior intelligence analyst writing a daily briefing. "
         "Write a professional, concise intelligence brief covering: "
@@ -118,7 +126,8 @@ def generate_daily_briefing(db=None, run_id: int = None) -> Dict:
         f"Contradictions: {json.dumps(contradictions, ensure_ascii=False)}\n"
         f"Chains: {json.dumps(chains, ensure_ascii=False)}\n"
         f"Actions: {json.dumps(actions, ensure_ascii=False)}\n"
-        f"Calibration: {json.dumps(calibration, ensure_ascii=False)}"
+        f"Calibration: {json.dumps(calibration, ensure_ascii=False)}\n"
+        f"MacroCalendar: {calendar_brief}"
     )
     text = analyse_custom_text(
         system_text,
@@ -128,6 +137,8 @@ def generate_daily_briefing(db=None, run_id: int = None) -> Dict:
         cache_key="daily_briefing::" + utc_now_iso()[:10],
     )["text"]
     text = _normalize_briefing_text(text)
+    if "Macro Calendar" not in text:
+        text = text.rstrip() + "\n\n" + calendar_brief
 
     briefing_columns = {row[1] for row in cur.execute("PRAGMA table_info(agent_briefings)").fetchall()}
     if "run_id" in briefing_columns:

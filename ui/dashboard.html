@@ -139,6 +139,11 @@
         <div id="gc-run-labels" style="display:flex;justify-content:space-between;font-size:10px;color:#8b949e;font-family:monospace;margin-top:4px;"></div>
       </div>
     </section>
+
+    <section class="panel" style="margin-top:18px">
+      <h2>Macro Calendar (7 Days)</h2>
+      <div id="gc-calendar"><div class="skeleton"></div><div class="skeleton" style="margin-top:8px"></div></div>
+    </section>
   </div>
   <script>
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -257,6 +262,22 @@
         <div class="muted" style="margin-top:8px">Risk level: ${esc(item.risk_level || 'LOW')} · Avg thesis confidence: ${pct(item.avg_thesis_confidence || 0)}%</div>
       `;
     }
+    function renderCalendar(events){
+      const el = document.getElementById('gc-calendar');
+      if (!el) return;
+      if (!events.length){
+        el.innerHTML = '<div class="muted">No major macro events in the next 7 days.</div>';
+        return;
+      }
+      el.innerHTML = events.map(item => {
+        const high = ['HIGH','EXTREME'].includes(String(item.impact || '').toUpperCase());
+        const icon = high ? '🔴' : '🟡';
+        return `<div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+          <div><strong>${icon} ${esc(item.estimated_date || '')}</strong> — ${esc(item.name || '')} <span class="muted">[${esc(item.impact || '')}]</span></div>
+          <div class="muted" style="margin-top:4px">Watch: ${esc((item.assets || []).slice(0, 3).join(', ') || 'n/a')} · ${esc(item.description || '')}</div>
+        </div>`;
+      }).join('');
+    }
     async function gcLoadRunChart() {
       try {
         const data = await fetch('/agent-journal').then(r => r.json());
@@ -294,7 +315,7 @@
 
     async function loadDashboard(){
       try{
-        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData] = await Promise.all([
+        const [thesesData, agentData, briefingData, summaryData, alertsData, narrativesData, regimeData, calibrationData, calendarData] = await Promise.all([
           fetchJson('/terminal/theses'),
           fetchJson('/api/agent/status'),
           fetchJson('/agent-briefing/latest'),
@@ -302,7 +323,8 @@
           fetchJson('/api/alerts/unread/count'),
           fetchJson('/api/intelligence/narratives'),
           fetchJson('/api/intelligence/regime'),
-          fetchJson('/api/intelligence/calibration')
+          fetchJson('/api/intelligence/calibration'),
+          fetchJson('/api/calendar?days=7')
         ]);
         const theses = thesesData.theses || thesesData.items || [];
         const agent = agentData || {};
@@ -330,6 +352,7 @@
         renderSummary(summaryData);
         renderNarratives(narrativesData.narratives || []);
         renderRegime(regimeData.regime || {});
+        renderCalendar(calendarData.events || []);
         gcLoadRunChart();
 
         document.getElementById('briefingMeta').textContent = briefing.generated_at ? ('Generated ' + briefing.generated_at) : 'Generated on demand';
