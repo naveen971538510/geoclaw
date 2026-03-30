@@ -1829,3 +1829,27 @@ Highlights:
 - the smoke test now covers the Night 5 surface area, including Ask, Live, predictions, calendar, debate, export, Telegram, and PWA endpoints
 - the debate smoke path resolves the top thesis dynamically from the live database before hitting the route
 - route count is already well above the Night 5 minimum, so the API surface is on track for final verification
+
+## Night 5 — Phase 17
+
+Status: Advanced briefing system complete
+
+Files updated:
+- `/Users/naveenkumar/GeoClaw/services/briefing_service.py`
+- `/Users/naveenkumar/GeoClaw/services/agent_loop_service.py`
+- `/Users/naveenkumar/GeoClaw/services/scheduler_service.py`
+- `/Users/naveenkumar/GeoClaw/main.py`
+
+Verification:
+- `python3 -m py_compile services/briefing_service.py services/agent_loop_service.py services/scheduler_service.py main.py` ✓
+- `curl -s "http://127.0.0.1:8000/agent-briefing/latest?format=trader" | python3 -m json.tool` ✓
+- `curl -s "http://127.0.0.1:8000/agent-briefing/latest?format=executive" | python3 -m json.tool` ✓
+- `curl -s "http://127.0.0.1:8000/agent-briefing/latest?format=raw_json" | python3 -m json.tool` ✓
+- `curl -s http://127.0.0.1:8000/api/scheduler/status | python3 -m json.tool` ✓
+- `python3 -m unittest discover -s tests -v` ✓
+- tests still passing: `105`
+
+Highlights:
+- `agent-briefing/latest` now supports `trader`, `executive`, and `raw_json` output modes
+- the agent loop now writes a trader-format briefing after every real run instead of only once per day
+- the scheduler now reserves 07:00 UTC for executive delivery and 15:00 UTC for trader-format briefing generation, with status tracking for the latest scheduled briefing job

@@ -722,25 +722,12 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
 
     try:
         live_state = get_agent_state()
-        last_briefing = str(live_state.get("briefing_last_run", "") or "")
-        should_brief = True
-        if last_briefing:
-            parsed = None
-            try:
-                parsed = datetime.fromisoformat(last_briefing.replace("Z", "+00:00"))
-            except Exception:
-                parsed = None
-            if parsed is not None:
-                if parsed.tzinfo is None:
-                    parsed = parsed.replace(tzinfo=timezone.utc)
-                should_brief = (datetime.now(timezone.utc) - parsed).total_seconds() >= 23 * 3600
-        if should_brief:
-            briefing = generate_daily_briefing(run_id=_latest_agent_run_id())
-            if briefing:
-                live_state["briefing_last_run"] = str(briefing.get("generated_at", "") or utc_now_iso())
-                save_agent_state(live_state)
-                briefing_created = 1
-                publish("briefing_generated", {"run_id": _latest_agent_run_id(), "generated_at": briefing.get("generated_at", ""), "briefing_id": briefing.get("id", 0)})
+        briefing = generate_daily_briefing(run_id=_latest_agent_run_id(), audience="trader", store=True)
+        if briefing:
+            live_state["briefing_last_run"] = str(briefing.get("generated_at", "") or utc_now_iso())
+            save_agent_state(live_state)
+            briefing_created = 1
+            publish("briefing_generated", {"run_id": _latest_agent_run_id(), "generated_at": briefing.get("generated_at", ""), "briefing_id": briefing.get("id", 0)})
         step_results["briefing"] = {"status": "ok", "created": briefing_created}
     except Exception as exc:
         logger.error("Step briefing failed: %s", exc, exc_info=True)

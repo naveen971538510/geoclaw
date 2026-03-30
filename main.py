@@ -9,6 +9,7 @@ from helpers import (
     get_summary,
 )
 from fetcher import fetch_live_articles
+import json
 import html
 from fastapi.responses import JSONResponse
 from config import DB_PATH, GEOCLAW_LOCAL_TOKEN, OPENAI_API_KEY
@@ -953,16 +954,25 @@ def agent_reasoning():
 
 
 @app.get("/agent-briefing/latest", response_class=JSONResponse)
-def agent_briefing_latest():
+def agent_briefing_latest(format: str = "trader"):
     try:
         from services.cache_service import cache_get, cache_set
         from services.briefing_service import get_latest_briefing
 
-        cached = cache_get("agent_briefing_latest")
+        fmt = str(format or "trader").strip().lower()
+        cached = cache_get(f"agent_briefing_latest::{fmt}")
         if cached is not None:
             return JSONResponse(cached)
-        payload = {"status": "ok", "item": get_latest_briefing()}
-        cache_set("agent_briefing_latest", payload, 300)
+        item = get_latest_briefing(audience=fmt)
+        if fmt == "raw_json":
+            try:
+                item_payload = json.loads(str(item.get("briefing_text", "") or "{}"))
+            except Exception:
+                item_payload = item
+        else:
+            item_payload = item
+        payload = {"status": "ok", "format": fmt, "item": item_payload}
+        cache_set(f"agent_briefing_latest::{fmt}", payload, 300)
         return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/agent-briefing/latest", "error": str(exc)}, status_code=500)
