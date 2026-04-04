@@ -109,7 +109,10 @@ class RuleEngine:
             return f"{mechanism}. {implication} — {geo} — {timeframe} horizon."
 
         truncated = headline[:120].rstrip(".").rstrip(",")
-        return f"Monitor: {truncated}. Context unclear — watch for follow-up confirmation."
+        truncated_clean = ''.join(c for c in truncated if ord(c) < 128).strip()
+        if len(truncated_clean.split()) < 2:
+            return ""  # Non-English headline — skip thesis key generation
+        return f"Monitor: {truncated_clean}. Context unclear — watch for follow-up confirmation."
 
     def reason(self, article: Dict) -> Tuple[float, List[Dict]]:
         text = self._text(article)

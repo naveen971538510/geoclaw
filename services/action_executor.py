@@ -309,7 +309,12 @@ class ActionExecutor:
             results.append(result)
             if result.get("status") == "ok":
                 executed += 1
-        return {"auto_executed": executed, "results": results}
+        return {
+            "auto_executed": executed,
+            "eligible": len(rows),
+            "results": results,
+            "reason": "no_safe_auto_approved_actions" if not rows else ("all_safe_actions_executed" if executed == len(rows) else "some_auto_actions_failed"),
+        }
 
     def execute_manually_approved(self) -> Dict:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -333,4 +338,9 @@ class ActionExecutor:
             results.append(result)
             if result.get("status") == "ok":
                 executed += 1
-        return {"manually_executed": executed, "results": results}
+        return {
+            "manually_executed": executed,
+            "eligible": len(rows),
+            "results": results,
+            "reason": "no_manually_approved_actions" if not rows else ("all_manually_approved_actions_executed" if executed == len(rows) else "some_manually_approved_actions_failed"),
+        }

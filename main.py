@@ -1715,6 +1715,30 @@ def api_dashboard_decision_view():
         return JSONResponse({"status": "error", "route": "/api/dashboard/decision-view", "error": str(exc)}, status_code=500)
 
 
+
+def _format_ask_response(result: dict) -> dict:
+    import re as _re
+    def _strip(s):
+        s = str(s or "")
+        s = _re.sub(r"\\u[0-9a-fA-F]{4}", " ", s)
+        s = _re.sub(r"[^\x20-\x7E]", " ", s)
+        s = _re.sub(r"\s+", " ", s).strip()
+        return s
+    card = result.get("answer_card") or {}
+    answer = _strip(card.get("direct_answer") or result.get("answer") or "")
+    supporting = [_strip(x) for x in (card.get("supporting_points") or result.get("grounding_points") or [])[:3]]
+    follow_up = (card.get("follow_up") or result.get("follow_up") or [])[:3]
+    return {
+        "status": "ok",
+        "question": result.get("question", ""),
+        "answer": answer,
+        "confidence_pct": int(result.get("confidence_pct") or float(result.get("confidence") or 0) * 100),
+        "supporting_points": supporting,
+        "follow_up": follow_up,
+        "caveat": _strip(card.get("caveat") or result.get("caveat") or ""),
+        "sources": (result.get("sources") or [])[:5],
+    }
+
 @app.get("/api/ask", response_class=JSONResponse)
 def api_ask(q: str = ""):
     try:
@@ -1722,7 +1746,7 @@ def api_ask(q: str = ""):
         if not question:
             return JSONResponse({"status": "error", "message": "q parameter required"}, status_code=400)
         result = _get_query_engine().ask(question)
-        return JSONResponse({"status": "ok", **result})
+        return JSONResponse(_format_ask_response(result))
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/ask", "error": str(exc)}, status_code=500)
 
@@ -1735,7 +1759,7 @@ async def api_ask_post(request: Request):
         if not question:
             return JSONResponse({"status": "error", "message": "question required"}, status_code=400)
         result = _get_query_engine().ask(question)
-        return JSONResponse({"status": "ok", **result})
+        return JSONResponse(_format_ask_response(result))
     except Exception as exc:
         return JSONResponse({"status": "error", "route": "/api/ask:post", "error": str(exc)}, status_code=500)
 

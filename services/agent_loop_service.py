@@ -360,7 +360,15 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     starting_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     seen_action_ids = set(starting_action_ids)
     step_results = {}
+    step_durations = {}
     run_goals = []
+
+    def _record_step(step_name: str, status: str, step_started: float, **payload):
+        duration = round(max(0.0, time.time() - step_started), 3)
+        step_durations[step_name] = duration
+        step_results[step_name] = {"status": status, "duration_seconds": duration, **payload}
+
+    step_started = time.time()
     try:
         from services.goal_planner import GoalPlanner
 
@@ -368,19 +376,40 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         run_goals = planner.generate_run_goals(DB_PATH, real_agent_runs)
         planner.log_goals(run_goals, DB_PATH, real_agent_runs)
         logger.info("Run goals (%s): %s", len(run_goals), [goal.get("goal", "") for goal in run_goals])
-        step_results["run_goals"] = {"status": "ok", "count": len(run_goals)}
+        _record_step("run_goals", "ok", step_started, count=len(run_goals))
     except Exception as exc:
         logger.warning("Goal planning failed: %s", exc)
         run_goals = []
-        step_results["run_goals"] = {"status": "error", "error": str(exc)}
+        _record_step("run_goals", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         ingestion = run_agent_cycle(max_records_per_source=max_records_per_source)
-        step_results["ingestion"] = {"status": "ok"}
+        _record_step(
+            "ingestion",
+            "ok",
+            step_started,
+            items_fetched=int(ingestion.get("items_fetched", 0) or 0),
+            items_kept=int(ingestion.get("items_kept", 0) or 0),
+            topic_runs=int(ingestion.get("topic_runs", 0) or 0),
+        )
     except Exception as exc:
         logger.error("Step ingestion failed: %s", exc, exc_info=True)
         ingestion = {}
-        step_results["ingestion"] = {"status": "error", "error": str(exc)}
-    active_research_stats = {"searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_found": 0}
+        _record_step("ingestion", "error", step_started, error=str(exc))
+    active_research_stats = {
+        "searches_done": 0,
+        "search_cycles": 0,
+        "searches_attempted": 0,
+        "searches_succeeded": 0,
+        "raw_results_found": 0,
+        "articles_found": 0,
+        "articles_saved": 0,
+        "extraction_failures": 0,
+        "duplicate_urls_skipped": 0,
+        "needs_found": 0,
+        "needs_processed": 0,
+    }
+    step_started = time.time()
     try:
         from services.active_researcher import ActiveResearcher
 
@@ -408,19 +437,49 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         combined_stats = researcher.execute_research(planned_needs) if planned_needs else {"searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_processed": 0, "details": []}
         active_research_stats = {
             "searches_done": int(combined_stats.get("searches_done", 0) or 0),
+            "search_cycles": int(combined_stats.get("search_cycles", 0) or 0),
+            "searches_attempted": int(combined_stats.get("searches_attempted", 0) or 0),
+            "searches_succeeded": int(combined_stats.get("searches_succeeded", 0) or 0),
+            "raw_results_found": int(combined_stats.get("raw_results_found", 0) or 0),
             "articles_found": int(combined_stats.get("articles_found", 0) or 0),
             "articles_saved": int(combined_stats.get("articles_saved", 0) or 0),
+            "extraction_failures": int(combined_stats.get("extraction_failures", 0) or 0),
+            "duplicate_urls_skipped": int(combined_stats.get("duplicate_urls_skipped", 0) or 0),
+            "wait_seconds": float(combined_stats.get("wait_seconds", 0.0) or 0.0),
+            "extraction_seconds": float(combined_stats.get("extraction_seconds", 0.0) or 0.0),
             "needs_processed": int(combined_stats.get("needs_processed", 0) or 0),
             "needs_found": len(planned_needs),
             "needs": planned_needs,
+            "zero_reasons": list(combined_stats.get("zero_reasons", []) or [])[:8],
             "details": list(combined_stats.get("details", []) or []),
+            "backend": str(combined_stats.get("backend", "") or ""),
+            "duration_seconds": float(combined_stats.get("duration_seconds", 0.0) or 0.0),
         }
         logger.info("Active research: %s", active_research_stats)
-        step_results["active_research"] = {"status": "ok", "searches_done": int(active_research_stats.get("searches_done", 0) or 0)}
+        _record_step(
+            "active_research",
+            "ok",
+            step_started,
+            searches_attempted=int(active_research_stats.get("searches_attempted", 0) or 0),
+            articles_saved=int(active_research_stats.get("articles_saved", 0) or 0),
+        )
     except Exception as exc:
         logger.warning("Active research failed: %s", exc)
-        active_research_stats = {"error": str(exc), "searches_done": 0, "articles_found": 0, "articles_saved": 0, "needs_found": 0}
-        step_results["active_research"] = {"status": "error", "error": str(exc)}
+        active_research_stats = {
+            "error": str(exc),
+            "searches_done": 0,
+            "search_cycles": 0,
+            "searches_attempted": 0,
+            "searches_succeeded": 0,
+            "raw_results_found": 0,
+            "articles_found": 0,
+            "articles_saved": 0,
+            "extraction_failures": 0,
+            "duplicate_urls_skipped": 0,
+            "needs_found": 0,
+        }
+        _record_step("active_research", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.budget_manager import BudgetManager
 
@@ -439,32 +498,45 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
             "web_sourced_articles": web_reasoning,
             "llm_observability": ingestion_reasoning.get("llm_observability") or web_reasoning.get("llm_observability") or {},
             "budget_allocation": budget_allocation,
+            "duration_seconds": round(
+                float(ingestion_reasoning.get("duration_seconds", 0.0) or 0.0)
+                + float(web_reasoning.get("duration_seconds", 0.0) or 0.0),
+                3,
+            ),
         }
-        step_results["reasoning"] = {"status": "ok"}
+        _record_step(
+            "reasoning",
+            "ok",
+            step_started,
+            processed=int(reasoning_pipeline_stats.get("processed", 0) or 0),
+            llm_used=int(reasoning_pipeline_stats.get("llm_used", 0) or 0),
+        )
     except Exception as exc:
         logger.error("Step reasoning failed: %s", exc, exc_info=True)
         reasoning_pipeline_stats = {"processed": 0, "theses_updated": 0, "chains_written": 0}
-        step_results["reasoning"] = {"status": "error", "error": str(exc)}
+        _record_step("reasoning", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.price_feed import PriceFeed
 
         prices_captured = int(PriceFeed().save_snapshot(DB_PATH) or 0)
-        step_results["prices"] = {"status": "ok"}
+        _record_step("prices", "ok", step_started, prices_captured=prices_captured)
     except Exception as exc:
         logger.warning("Price snapshot failed: %s", exc)
         prices_captured = 0
-        step_results["prices"] = {"status": "error", "error": str(exc)}
+        _record_step("prices", "error", step_started, error=str(exc))
     prediction_checks = {"checked": 0, "verified": 0, "refuted": 0, "neutral": 0}
+    step_started = time.time()
     try:
         from services.prediction_tracker import PredictionTracker
 
         prediction_checks = PredictionTracker(DB_PATH).check_pending_predictions()
         if int(prediction_checks.get("verified", 0) or 0) > 0 or int(prediction_checks.get("refuted", 0) or 0) > 0:
             publish("prediction_checked", prediction_checks)
-        step_results["prediction_checks"] = {"status": "ok"}
+        _record_step("prediction_checks", "ok", step_started, checked=int(prediction_checks.get("checked", 0) or 0))
     except Exception as exc:
         logger.warning("Prediction check failed: %s", exc)
-        step_results["prediction_checks"] = {"status": "error", "error": str(exc)}
+        _record_step("prediction_checks", "error", step_started, error=str(exc))
     payload = {"cards": [], "stats": {}}
     goals = []
     watch_targets = []
@@ -499,6 +571,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     action_cap_blocks = 0
     cluster_cooldown_blocks = 0
     reasoning_cap_blocks = int(ingestion.get("reasoning_cap_blocks", 0) or 0)
+    step_started = time.time()
     try:
         payload = get_terminal_payload_clean(limit=80)
         goals = list_goals(active_only=True)
@@ -766,10 +839,18 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
                 autonomous_goals_created = len(created_goals)
                 if autonomous_goals_created:
                     bump_daily_counter("autonomous_goals_created", autonomous_goals_created)
-        step_results["actions"] = {"status": "ok"}
+        _record_step(
+            "actions",
+            "ok",
+            step_started,
+            decisions_created=len(decisions),
+            tasks_created=len(tasks),
+            proposals_created=action_proposals_created,
+        )
     except Exception as exc:
         logger.error("Step actions failed: %s", exc, exc_info=True)
-        step_results["actions"] = {"status": "error", "error": str(exc)}
+        _record_step("actions", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.action_executor import ActionExecutor
 
@@ -779,13 +860,28 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         actions_executed = {
             "auto": int(auto_result.get("auto_executed", 0) or 0),
             "manual": int(manual_result.get("manually_executed", 0) or 0),
+            "auto_eligible": int(auto_result.get("eligible", 0) or 0),
+            "manual_eligible": int(manual_result.get("eligible", 0) or 0),
+            "auto_reason": str(auto_result.get("reason", "") or ""),
+            "manual_reason": str(manual_result.get("reason", "") or ""),
+            "auto_results": list(auto_result.get("results", []) or [])[:5],
+            "manual_results": list(manual_result.get("results", []) or [])[:5],
         }
-        step_results["action_execution"] = {"status": "ok", **actions_executed}
+        _record_step(
+            "action_execution",
+            "ok",
+            step_started,
+            auto=actions_executed["auto"],
+            manual=actions_executed["manual"],
+            auto_eligible=actions_executed["auto_eligible"],
+            manual_eligible=actions_executed["manual_eligible"],
+        )
     except Exception as exc:
         logger.warning("Action execution failed: %s", exc)
         actions_executed = {"error": str(exc)}
-        step_results["action_execution"] = {"status": "error", "error": str(exc)}
+        _record_step("action_execution", "error", step_started, error=str(exc))
 
+    step_started = time.time()
     try:
         from services.alert_service import AlertService
 
@@ -804,12 +900,13 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         actions_for_alerts = [dict(row) for row in alert_cur.fetchall()]
         alert_conn.close()
         alerts_fired = int(alerter.evaluate_theses(theses_for_alerts) or 0) + int(alerter.evaluate_actions(actions_for_alerts) or 0)
-        step_results["alerts"] = {"status": "ok"}
+        _record_step("alerts", "ok", step_started, alerts_fired=alerts_fired)
     except Exception as exc:
         logger.warning("Alert step failed: %s", exc)
         alerts_fired = 0
-        step_results["alerts"] = {"status": "error", "error": str(exc)}
+        _record_step("alerts", "error", step_started, error=str(exc))
 
+    step_started = time.time()
     try:
         live_state = get_agent_state()
         briefing = generate_daily_briefing(run_id=_latest_agent_run_id(), audience="trader", store=True)
@@ -818,43 +915,47 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
             save_agent_state(live_state)
             briefing_created = 1
             publish("briefing_generated", {"run_id": _latest_agent_run_id(), "generated_at": briefing.get("generated_at", ""), "briefing_id": briefing.get("id", 0)})
-        step_results["briefing"] = {"status": "ok", "created": briefing_created}
+        _record_step("briefing", "ok", step_started, created=briefing_created)
     except Exception as exc:
         logger.error("Step briefing failed: %s", exc, exc_info=True)
-        step_results["briefing"] = {"status": "error", "error": str(exc)}
+        _record_step("briefing", "error", step_started, error=str(exc))
 
+    step_started = time.time()
     try:
         decay_stats = decay_stale_theses(DB_PATH)
         promote_demote_stats = promote_demote_theses(DB_PATH)
-        step_results["thesis_lifecycle"] = {"status": "ok"}
+        _record_step("thesis_lifecycle", "ok", step_started, decayed=int(decay_stats.get("decayed", 0) or 0))
     except Exception as exc:
         logger.error("Step thesis_lifecycle failed: %s", exc, exc_info=True)
         decay_stats = {"decayed": 0, "superseded": 0}
         promote_demote_stats = {"promoted_to_confirmed": 0, "demoted_to_weakened": 0}
-        step_results["thesis_lifecycle"] = {"status": "error", "error": str(exc)}
+        _record_step("thesis_lifecycle", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.thesis_deduplicator import ThesisDeduplicator
 
         dedup_result = ThesisDeduplicator().merge_duplicates(DB_PATH)
         logger.info("Deduplication merged %s thesis pairs", int(dedup_result.get("merged", 0) or 0))
-        step_results["deduplication"] = {"status": "ok", "merged": int(dedup_result.get("merged", 0) or 0)}
+        _record_step("deduplication", "ok", step_started, merged=int(dedup_result.get("merged", 0) or 0))
     except Exception as exc:
         logger.warning("Dedup failed: %s", exc)
-        step_results["deduplication"] = {"status": "error", "error": str(exc)}
+        _record_step("deduplication", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.sentiment_index import SentimentIndex
 
         sentiment_snapshot = SentimentIndex().save_daily_score(DB_PATH)
-        step_results["sentiment_index"] = {"status": "ok", "score": float(sentiment_snapshot.get("score", 0.0) or 0.0)}
+        _record_step("sentiment_index", "ok", step_started, score=float(sentiment_snapshot.get("score", 0.0) or 0.0))
     except Exception as exc:
         logger.warning("Sentiment index failed: %s", exc)
-        step_results["sentiment_index"] = {"status": "error", "error": str(exc)}
+        _record_step("sentiment_index", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.alert_service import AlertService
         from services.anomaly_detector import AnomalyDetector
 
         anomalies = AnomalyDetector().detect_all(DB_PATH)
-        step_results["anomalies"] = {"status": "ok", "count": len(anomalies)}
+        _record_step("anomalies", "ok", step_started, count=len(anomalies))
         for anomaly in anomalies:
             if str(anomaly.get("severity", "")).upper() in {"HIGH", "EXTREME"}:
                 publish("anomaly_detected", anomaly)
@@ -866,18 +967,19 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
                 )
     except Exception as exc:
         logger.warning("Anomaly detection failed: %s", exc)
-        step_results["anomalies"] = {"status": "error", "error": str(exc)}
+        _record_step("anomalies", "error", step_started, error=str(exc))
+    step_started = time.time()
     try:
         from services.rule_learner import RuleLearner
 
         learn_stats = RuleLearner(DB_PATH).write_learned_rules()
         if int(learn_stats.get("new_rules", 0) or 0) > 0:
             publish("rules_learned", learn_stats)
-        step_results["rule_learning"] = {"status": "ok", "new_rules": int(learn_stats.get("new_rules", 0) or 0)}
+        _record_step("rule_learning", "ok", step_started, new_rules=int(learn_stats.get("new_rules", 0) or 0))
     except Exception as exc:
         logger.warning("Rule learning failed: %s", exc)
         learn_stats = {"error": str(exc), "new_rules": 0, "updated_rules": 0, "retired_rules": 0, "analysed_predictions": 0, "candidates_considered": 0}
-        step_results["rule_learning"] = {"status": "error", "error": str(exc)}
+        _record_step("rule_learning", "error", step_started, error=str(exc))
 
     current_action_ids = {int(item.get("id", 0) or 0) for item in list_actions(limit=500)}
     action_proposals_created = max(action_proposals_created, len(current_action_ids - starting_action_ids))
@@ -888,6 +990,14 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
     metrics = {
         "items_fetched": int(ingestion.get("items_fetched", 0) or 0),
         "items_kept": int(ingestion.get("items_kept", 0) or 0),
+        "ingestion": {
+            "duration_seconds": float(ingestion.get("duration_seconds", 0.0) or 0.0),
+            "market_duration_seconds": float(ingestion.get("market_duration_seconds", 0.0) or 0.0),
+            "topic_runs": int(ingestion.get("topic_runs", 0) or 0),
+            "actual_ingestion_cycles": int(ingestion.get("actual_ingestion_cycles", 0) or 0),
+            "reused_topic_runs": int(ingestion.get("reused_topic_runs", 0) or 0),
+            "topics": list(ingestion.get("topics", []) or []),
+        },
         "run_goals": [goal.get("goal", "") for goal in run_goals],
         "alerts_created": max(int(ingestion.get("alerts_created", 0) or 0), int(surfaced_alerts or 0), int(decision_counts.get("alert", 0) or 0)),
         "decision_counts": dict(decision_counts),
@@ -926,6 +1036,7 @@ def run_real_agent_loop(max_records_per_source: int = 8) -> Dict:
         "action_cap_blocks": action_cap_blocks,
         "cluster_cooldown_blocks": cluster_cooldown_blocks,
         "duration_seconds": duration_seconds,
+        "step_durations": step_durations,
         "steps": step_results,
         "anomalies": anomalies[:10],
         "db_touched_counts": {

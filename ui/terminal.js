@@ -73,6 +73,12 @@ function latestAgentRun(){
 function latestCompletedRun(){
   return (((state.agentStatus || {}).runs || []).find(run => run && (run.finished_at || run.completed_at || run.started_at))) || {};
 }
+function latestJournalEntry(){
+  return ((state.agentJournal || [])[0]) || {};
+}
+function latestJournalMetrics(){
+  return (latestJournalEntry().metrics || {});
+}
 function syncRunAgentButton(){
   const button = document.getElementById('runAgentBtn');
   const realButton = document.getElementById('runRealAgentBtn');
@@ -756,10 +762,23 @@ async function openOverlay(section){
 
   if (section === 'actions'){
     const actionsList = state.agentActions || [];
+    const latestMetrics = latestJournalMetrics();
+    const execMetrics = (latestMetrics.actions_executed || {});
+    const latestExecution = (actionsList || [])
+      .filter(item => ['completed','failed'].includes(String(item.status || '').toLowerCase()))
+      .sort((a, b) => parseMs(b.executed_at || b.created_at || '') - parseMs(a.executed_at || a.created_at || ''))[0] || {};
+    const executedTotal = Number(execMetrics.auto || 0) + Number(execMetrics.manual || 0);
+    const eligibleTotal = Number(execMetrics.auto_eligible || 0) + Number(execMetrics.manual_eligible || 0);
+    const execMessage = executedTotal > 0
+      ? String(executedTotal) + ' action(s) executed this run.'
+      : (eligibleTotal > 0 ? 'Approved actions existed, but none completed successfully this run.' : 'No safe or approved actions executed this run.');
+    const latestExecSummary = latestExecution.action_type
+      ? 'Latest execution: ' + String(latestExecution.action_type || '') + ' · ' + String(latestExecution.status || '') + (actionExecutionSummary(latestExecution) ? ' · ' + actionExecutionSummary(latestExecution) : '') + ' · ' + relTime(latestExecution.executed_at || latestExecution.created_at || '')
+      : 'No completed or failed action executions are recorded yet.';
     title.textContent = 'Actions';
     subtitle.textContent = 'Proposed action adapters with approval gate, preview-only payloads, and audit notes.';
     actions.innerHTML = '<a class="textlink" href="/agent-actions" target="_blank" rel="noopener noreferrer">Open raw actions</a>';
-    body.innerHTML = panelCard('Proposed Actions', actionsList.length
+    body.innerHTML = panelCard('Execution Summary', '<div class="mini"><div class="mini-title">' + esc(execMessage) + '</div><div class="mini-copy">Auto ' + esc(String(execMetrics.auto || 0)) + ' / eligible ' + esc(String(execMetrics.auto_eligible || 0)) + ' · Manual ' + esc(String(execMetrics.manual || 0)) + ' / eligible ' + esc(String(execMetrics.manual_eligible || 0)) + '</div><div class="mini-copy">' + esc(latestExecSummary) + '</div></div>') + panelCard('Proposed Actions', actionsList.length
       ? actionsList.map(item => {
           const status = String(item.status || 'proposed');
           const badgeClass = status === 'completed' ? 'status-good' : (status === 'failed' || status === 'rejected' ? 'status-bad' : (status === 'approved' || status === 'auto_approved' ? 'status-good' : 'status-warn'));

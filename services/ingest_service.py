@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -396,6 +397,7 @@ def run_ingestion_cycle(
     enabled_sources: List[str] = None,
     reasoning_budget: int = 0,
 ) -> Dict:
+    started = time.time()
     watchlist = watchlist or DEFAULT_WATCHLIST
     query = query or DEFAULT_QUERY
 
@@ -409,18 +411,46 @@ def run_ingestion_cycle(
     raw_items = []
     errors = []
     used_sources = []
+    source_timings = []
+    substep_durations = {}
 
     for name, source in _get_sources(enabled_sources=enabled_sources):
+        source_started = time.time()
         try:
             items = source.fetch(query=query, max_records=max_records_per_source)
             raw_items.extend(items)
             used_sources.append(name)
+            source_timings.append(
+                {
+                    "source": name,
+                    "status": "ok",
+                    "items_fetched": len(items),
+                    "duration_seconds": round(max(0.0, time.time() - source_started), 3),
+                }
+            )
         except Exception as exc:
             errors.append(f"{name}: {_compact_error(str(exc))}")
+            source_timings.append(
+                {
+                    "source": name,
+                    "status": "error",
+                    "items_fetched": 0,
+                    "duration_seconds": round(max(0.0, time.time() - source_started), 3),
+                    "error": _compact_error(str(exc)),
+                }
+            )
 
+    substep_started = time.time()
     normalized = [normalize_article(x) for x in raw_items if getattr(x, "headline", "") and getattr(x, "url", "")]
+    substep_durations["normalize"] = round(max(0.0, time.time() - substep_started), 3)
+
+    substep_started = time.time()
     filtered_items, suppressed_items = suppress_articles(normalized)
+    substep_durations["suppress"] = round(max(0.0, time.time() - substep_started), 3)
+
+    substep_started = time.time()
     unique_items = dedupe_articles(filtered_items)
+    substep_durations["dedupe"] = round(max(0.0, time.time() - substep_started), 3)
 
     alerts_created = 0
     reasoning_chains_built = 0
@@ -441,6 +471,7 @@ def run_ingestion_cycle(
     llm_run_state = new_llm_run_state()
 
     try:
+        prepare_started = time.time()
         prepared_entries = []
         for article in unique_items:
             enrichment = classify_article(article, watchlist=watchlist)
@@ -461,8 +492,14 @@ def run_ingestion_cycle(
                     "eligible_for_llm": _should_analyse_with_llm(article, ranking),
                 }
             )
+        substep_durations["prepare_enrichment"] = round(max(0.0, time.time() - prepare_started), 3)
 
-        for cluster in _cluster_entries(prepared_entries):
+        cluster_started = time.time()
+        clusters = _cluster_entries(prepared_entries)
+        substep_durations["cluster_build"] = round(max(0.0, time.time() - cluster_started), 3)
+
+        llm_started = time.time()
+        for cluster in clusters:
             items = cluster["items"]
             cluster_size = len(items)
             for item in items:
@@ -501,7 +538,10 @@ def run_ingestion_cycle(
             applied_mode = "default" if meta.get("used_fallback") else str(meta.get("mode", "") or "")
             for item in items:
                 _apply_llm_analysis(item, analysis, applied_mode, fallback_reason)
+        substep_durations["llm_enrichment"] = round(max(0.0, time.time() - llm_started), 3)
 
+        write_started = time.time()
+        reasoning_seconds = 0.0
         for item in prepared_entries:
             article = item["article"]
             enrichment = item["enrichment"]
@@ -522,6 +562,7 @@ def run_ingestion_cycle(
                     reasoning_cap_blocks += 1
                 else:
                     try:
+                        chain_started = time.time()
                         build_reasoning_chain(
                             article.get("headline", ""),
                             inferred_category,
@@ -530,6 +571,7 @@ def run_ingestion_cycle(
                             thesis_key=enrichment.get("thesis", "") or article.get("headline", ""),
                             source_name=article.get("source_name", ""),
                         )
+                        reasoning_seconds += max(0.0, time.time() - chain_started)
                         reasoning_chains_built += 1
                         if cluster_key:
                             reasoning_by_cluster[cluster_key] = int(reasoning_by_cluster.get(cluster_key, 0) or 0) + 1
@@ -551,6 +593,9 @@ def run_ingestion_cycle(
                 "cluster_key": enrichment.get("cluster_key", ""),
                 "llm_mode": enrichment.get("llm_mode", ""),
             })
+        total_write_seconds = max(0.0, time.time() - write_started)
+        substep_durations["db_write"] = round(max(0.0, total_write_seconds - reasoning_seconds), 3)
+        substep_durations["reasoning_chain_build"] = round(max(0.0, reasoning_seconds), 3)
 
         _finish_run(
             cur,
@@ -589,6 +634,9 @@ def run_ingestion_cycle(
         "errors": errors,
         "suppressed_preview": suppressed_items[:5],
         "used_sources": used_sources,
+        "source_timings": source_timings,
+        "substep_durations": substep_durations,
+        "duration_seconds": round(max(0.0, time.time() - started), 3),
         "llm_metrics": llm_metrics,
         "reasoning_cap_blocks": reasoning_cap_blocks,
         "reasoning_chains_built": reasoning_chains_built,

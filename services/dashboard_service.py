@@ -109,6 +109,29 @@ def _recent_events(limit: int = 5) -> List[Dict]:
     ]
 
 
+def _action_result_summary(metadata: Dict) -> str:
+    data = metadata or {}
+    if data.get("added"):
+        return "Added " + str(data.get("added"))
+    if data.get("sent") is not None:
+        return "Sent successfully" if data.get("sent") else "Not sent"
+    if data.get("highlighted"):
+        return "Highlighted " + str(data.get("highlighted"))
+    if data.get("flagged"):
+        return "Flagged " + str(data.get("flagged"))
+    if data.get("closed"):
+        return "Closed " + str(data.get("closed"))
+    if data.get("file"):
+        return "Wrote " + str(data.get("file"))
+    if data.get("alerted"):
+        return "Alert fired"
+    if data.get("log_path"):
+        return "Logged to file"
+    if data.get("error"):
+        return "Error: " + str(data.get("error"))
+    return ""
+
+
 def build_dashboard_decision_view(db_path: str) -> Dict:
     conn = _db(db_path)
     try:
@@ -249,6 +272,46 @@ def build_dashboard_decision_view(db_path: str) -> Dict:
             """
         ).fetchall() if _table_exists(conn, "web_search_log") else []
         active_research = latest_metrics.get("active_research", {}) or {}
+        action_execution_metrics = latest_metrics.get("actions_executed", {}) or {}
+        latest_execution_row = conn.execute(
+            """
+            SELECT id, action_type, status, thesis_key, metadata, created_at, executed_at
+            FROM agent_actions
+            WHERE status IN ('completed', 'failed')
+            ORDER BY COALESCE(executed_at, created_at) DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone() if _table_exists(conn, "agent_actions") else None
+        latest_execution = {}
+        if latest_execution_row:
+            latest_execution = dict(latest_execution_row)
+            try:
+                latest_execution["metadata"] = json.loads(latest_execution.get("metadata") or "{}")
+            except Exception:
+                latest_execution["metadata"] = {}
+            latest_execution["result_summary"] = _action_result_summary(latest_execution.get("metadata") or {})
+        step_durations = latest_metrics.get("step_durations", {}) or {}
+        slow_steps = [
+            {"name": key, "duration_seconds": float(value or 0.0)}
+            for key, value in sorted(step_durations.items(), key=lambda item: float(item[1] or 0.0), reverse=True)
+            if float(value or 0.0) > 0
+        ][:3]
+        if int(active_research.get("searches_attempted", 0) or 0) > 0 and int(active_research.get("articles_saved", 0) or 0) <= 0:
+            research_message = "Searched but found no usable new evidence"
+        elif str(active_research.get("reason", "") or "") == "searcher_unavailable":
+            research_message = "Web search backend unavailable for the latest run"
+        elif int(active_research.get("needs_found", 0) or 0) <= 0:
+            research_message = "No active research was needed in the latest run."
+        else:
+            research_message = "Research added new external evidence for reasoning."
+        total_executed = int(action_execution_metrics.get("auto", 0) or 0) + int(action_execution_metrics.get("manual", 0) or 0)
+        total_eligible = int(action_execution_metrics.get("auto_eligible", 0) or 0) + int(action_execution_metrics.get("manual_eligible", 0) or 0)
+        if total_executed > 0:
+            action_execution_message = f"{total_executed} action(s) executed this run"
+        elif total_eligible > 0:
+            action_execution_message = "Approved actions were present, but none completed successfully"
+        else:
+            action_execution_message = "No safe or approved actions executed this run"
 
         changes = {
             "run_goals": list(latest_metrics.get("run_goals", []) or [])[:5],
@@ -259,14 +322,27 @@ def build_dashboard_decision_view(db_path: str) -> Dict:
             "new_anomalies": list(latest_metrics.get("anomalies", []) or [])[:5],
             "research": {
                 "searches_done": int(active_research.get("searches_done", 0) or 0),
+                "search_cycles": int(active_research.get("search_cycles", 0) or 0),
+                "searches_attempted": int(active_research.get("searches_attempted", 0) or 0),
+                "searches_succeeded": int(active_research.get("searches_succeeded", 0) or 0),
+                "raw_results_found": int(active_research.get("raw_results_found", 0) or 0),
                 "articles_found": int(active_research.get("articles_found", 0) or 0),
                 "articles_saved": int(active_research.get("articles_saved", 0) or 0),
+                "extraction_failures": int(active_research.get("extraction_failures", 0) or 0),
+                "duplicate_urls_skipped": int(active_research.get("duplicate_urls_skipped", 0) or 0),
                 "needs_found": int(active_research.get("needs_found", 0) or 0),
                 "needs": list(active_research.get("needs", []) or [])[:3],
+                "zero_reasons": list(active_research.get("zero_reasons", []) or [])[:5],
+                "backend": str(active_research.get("backend", "") or ""),
+                "duration_seconds": float(active_research.get("duration_seconds", 0.0) or 0.0),
+                "wait_seconds": float(active_research.get("wait_seconds", 0.0) or 0.0),
+                "extraction_seconds": float(active_research.get("extraction_seconds", 0.0) or 0.0),
+                "message": research_message,
                 "log": [dict(row) for row in research_logs],
             },
             "last_run_duration": float(latest_metrics.get("duration_seconds", 0.0) or 0.0),
             "latest_run_at": latest_created_at,
+            "slow_steps": slow_steps,
         }
 
         return {
@@ -281,6 +357,14 @@ def build_dashboard_decision_view(db_path: str) -> Dict:
                     "rejected": int(action_counts.get("rejected", 0) or 0),
                 },
                 "items": action_items,
+                "execution_summary": {
+                    "message": action_execution_message,
+                    "auto": int(action_execution_metrics.get("auto", 0) or 0),
+                    "manual": int(action_execution_metrics.get("manual", 0) or 0),
+                    "auto_eligible": int(action_execution_metrics.get("auto_eligible", 0) or 0),
+                    "manual_eligible": int(action_execution_metrics.get("manual_eligible", 0) or 0),
+                    "latest_execution": latest_execution,
+                },
             },
             "prediction_truth": {
                 "verified": verified,

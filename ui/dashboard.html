@@ -612,6 +612,7 @@
       const research = changes.research || {};
       const researchNeeds = (research.needs || []).slice(0, 2);
       const researchLog = (research.log || []).slice(0, 2);
+      const slowSteps = (changes.slow_steps || []).slice(0, 3);
       if (meta) {
         const seconds = Number(changes.last_run_duration || 0);
         meta.textContent = `Last run ${seconds ? seconds.toFixed(1) + 's' : 'duration n/a'}${changes.latest_run_at ? ' · ' + timeAgo(changes.latest_run_at) : ''}`;
@@ -635,13 +636,13 @@
         <div class="decision-item"><div style="font-weight:700">New contradictions / anomalies</div><div class="mini-note" style="margin-top:8px">${newContradictions.length ? newContradictions.length + ' contradictions' : 'No new contradictions'} · ${newAnomalies.length ? newAnomalies.length + ' anomalies' : 'no anomalies'}</div></div>
         <div class="decision-item">
           <div style="font-weight:700">Research</div>
-          <div class="mini-note" style="margin-top:8px">
-            🔍 Active research: ${Number(research.searches_done || 0)} searches, ${Number(research.articles_found || 0)} articles found, ${Number(research.articles_saved || 0)} saved
-          </div>
-          <div class="mini-note" style="margin-top:6px">
-            ${researchNeeds.length ? researchNeeds.map(item => `Need: ${esc(item.reason || item.thesis_key || '')}`).join('<br>') : (researchLog.length ? researchLog.map(item => `Searched: ${esc(item.query || '')} (${Number(item.result_count || 0)} results)`).join('<br>') : 'No active research was needed in the latest run.')}
-          </div>
+          <div class="mini-note" style="margin-top:8px">${esc(research.message || 'No active research was needed in the latest run.')}</div>
+          <div class="mini-note" style="margin-top:6px">Searches attempted ${Number(research.searches_attempted || 0)} · succeeded ${Number(research.searches_succeeded || 0)} · raw results ${Number(research.raw_results_found || 0)} · saved ${Number(research.articles_saved || 0)}</div>
+          <div class="mini-note" style="margin-top:6px">Extraction failures ${Number(research.extraction_failures || 0)} · duplicates skipped ${Number(research.duplicate_urls_skipped || 0)} · backend ${esc(research.backend || 'n/a')}</div>
+          <div class="mini-note" style="margin-top:6px">Search time ${Number(research.duration_seconds || 0).toFixed(1)}s · wait ${Number(research.wait_seconds || 0).toFixed(1)}s · extraction ${Number(research.extraction_seconds || 0).toFixed(1)}s</div>
+          <div class="mini-note" style="margin-top:6px">${researchNeeds.length ? researchNeeds.map(item => `Need: ${esc(item.reason || item.thesis_key || '')}`).join('<br>') : (researchLog.length ? researchLog.map(item => `Searched: ${esc(item.query || '')} (${Number(item.result_count || 0)} results)`).join('<br>') : 'No active research was needed in the latest run.')}</div>
         </div>
+        <div class="decision-item"><div style="font-weight:700">Slowest steps</div><div class="mini-note" style="margin-top:8px">${slowSteps.length ? slowSteps.map(item => `${esc(item.name || 'step')} ${Number(item.duration_seconds || 0).toFixed(1)}s`).join('<br>') : 'Step timings were not available for the latest run.'}</div></div>
       `;
     }
     function renderTopThesisCards(items){
@@ -681,6 +682,8 @@
       const listWrap = document.getElementById('gc-action-queue');
       if (!countWrap || !listWrap) return;
       const counts = (queue || {}).counts || {};
+      const execution = (queue || {}).execution_summary || {};
+      const latestExecution = execution.latest_execution || {};
       countWrap.innerHTML = ['pending','draft','approved','rejected'].map(key => `
         <div class="counter">
           <div class="k">${esc(key)}</div>
@@ -688,7 +691,15 @@
         </div>
       `).join('');
       const items = (queue || {}).items || [];
-      listWrap.innerHTML = items.length ? items.map(item => `
+      const summaryCard = `
+        <div class="action-item" style="border-style:dashed">
+          <div style="font-weight:700">Execution visibility</div>
+          <div class="mini-note" style="margin-top:6px">${esc(execution.message || 'No safe or approved actions executed this run')}</div>
+          <div class="mini-note" style="margin-top:6px">Auto ${Number(execution.auto || 0)} / eligible ${Number(execution.auto_eligible || 0)} · Manual ${Number(execution.manual || 0)} / eligible ${Number(execution.manual_eligible || 0)}</div>
+          <div class="mini-note" style="margin-top:6px">${latestExecution.action_type ? `Latest: ${esc(latestExecution.action_type || '')} · ${esc(latestExecution.status || '')} · ${esc(latestExecution.result_summary || 'No result details')} · ${timeAgo(latestExecution.executed_at || latestExecution.created_at || '')}` : 'No completed or failed action executions are recorded yet.'}</div>
+        </div>
+      `;
+      listWrap.innerHTML = summaryCard + (items.length ? items.map(item => `
         <div class="action-item">
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
             <div style="font-weight:700">${esc(item.action_type || 'action')}</div>
@@ -698,7 +709,7 @@
           <div style="margin-top:8px">${esc(item.reason || item.why_now || 'No reason recorded.')}</div>
           <div class="mini-note" style="margin-top:6px">${esc(item.why_now || '')}</div>
         </div>
-      `).join('') : '<div class="muted">No actionable items are queued right now.</div>';
+      `).join('') : '<div class="muted">No actionable items are queued right now.</div>');
     }
     function renderPredictionTruth(panel){
       const countWrap = document.getElementById('gc-prediction-counts');

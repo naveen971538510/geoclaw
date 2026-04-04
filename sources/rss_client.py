@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import List
 import urllib.request
 from xml.etree import ElementTree as ET
@@ -21,8 +22,10 @@ DEFAULT_RSS_FEEDS = [
 
 class RSSSource(NewsSource):
     name = "rss"
+    CACHE_TTL_SECONDS = 180
+    _cache = {"fetched_at": 0.0, "items": []}
 
-    def __init__(self, feeds: list[dict] | None = None, timeout: int = 20):
+    def __init__(self, feeds: list[dict] | None = None, timeout: int = 10):
         self.feeds = feeds or DEFAULT_RSS_FEEDS
         self.timeout = timeout
 
@@ -74,6 +77,9 @@ class RSSSource(NewsSource):
         return items
 
     def fetch(self, query: str | None = None, max_records: int = 20) -> List[RawArticle]:
+        cached_items = self._read_cache()
+        if cached_items:
+            return self.unique(cached_items)[:max_records]
         all_items: List[RawArticle] = []
         for feed in self.feeds:
             try:
@@ -89,4 +95,19 @@ class RSSSource(NewsSource):
                 all_items.extend(parsed)
             except Exception as exc:
                 print(f"RSSSource warning [{feed['name']}]: {exc}")
-        return self.unique(all_items)[:max_records]
+        unique_items = self.unique(all_items)
+        self._write_cache(unique_items)
+        return unique_items[:max_records]
+
+    @classmethod
+    def _read_cache(cls) -> List[RawArticle]:
+        fetched_at = float(cls._cache.get("fetched_at", 0.0) or 0.0)
+        if not fetched_at:
+            return []
+        if (time.time() - fetched_at) > cls.CACHE_TTL_SECONDS:
+            return []
+        return list(cls._cache.get("items", []) or [])
+
+    @classmethod
+    def _write_cache(cls, items: List[RawArticle]):
+        cls._cache = {"fetched_at": time.time(), "items": list(items or [])}

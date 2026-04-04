@@ -1,7 +1,17 @@
 import json
+import time
+from copy import deepcopy
 from typing import Dict, List
 
-from config import DB_PATH, AGENT_MAX_RECORDS_PER_SOURCE, GDELT_STATE_FILE
+from config import (
+    DB_PATH,
+    AGENT_MAX_RECORDS_PER_SOURCE,
+    ENABLE_GDELT,
+    ENABLE_GUARDIAN,
+    ENABLE_NEWSAPI,
+    ENABLE_RSS,
+    GDELT_STATE_FILE,
+)
 from market import fetch_and_store_market_snapshots, get_latest_market_snapshots
 from services.db_helpers import get_conn as shared_get_conn
 from services.ingest_service import run_ingestion_cycle
@@ -40,6 +50,7 @@ TOPIC_QUERIES = [
         "enabled_sources": ["rss", "newsapi", "guardian"],
     },
 ]
+QUERY_INSENSITIVE_SOURCES = {"rss"}
 
 
 def get_conn():
@@ -53,6 +64,27 @@ def _gdelt_state():
     except Exception:
         pass
     return {}
+
+
+def _gdelt_cooldown_active() -> bool:
+    state = _gdelt_state()
+    until = float(state.get("cooldown_until", 0) or 0)
+    return time.time() < until
+
+
+def _active_sources(enabled_sources: List[str]) -> List[str]:
+    active = []
+    for raw_name in enabled_sources or []:
+        name = str(raw_name or "").strip().lower()
+        if name == "rss" and ENABLE_RSS:
+            active.append(name)
+        elif name == "gdelt" and ENABLE_GDELT and not _gdelt_cooldown_active():
+            active.append(name)
+        elif name == "newsapi" and ENABLE_NEWSAPI:
+            active.append(name)
+        elif name == "guardian" and ENABLE_GUARDIAN:
+            active.append(name)
+    return active
 
 
 def get_agent_status(limit: int = 12) -> Dict:
@@ -105,8 +137,11 @@ def get_agent_status(limit: int = 12) -> Dict:
 
 
 def run_agent_cycle(max_records_per_source: int = None) -> Dict:
+    started = time.time()
     max_records_per_source = int(max_records_per_source or AGENT_MAX_RECORDS_PER_SOURCE)
+    market_started = time.time()
     market_result = fetch_and_store_market_snapshots()
+    market_duration = round(max(0.0, time.time() - market_started), 3)
 
     totals = {
         "status": "ok",
@@ -127,47 +162,79 @@ def run_agent_cycle(max_records_per_source: int = None) -> Dict:
             "fallback_reasons": {},
         },
         "reasoning_chains_built": 0,
+        "duration_seconds": 0.0,
+        "market_duration_seconds": market_duration,
+        "actual_ingestion_cycles": 0,
+        "reused_topic_runs": 0,
     }
-    remaining_reasoning_budget = 5
+    # Keep ingestion focused on fetch/classify/store. The dedicated reasoning
+    # pipeline runs immediately after ingestion in the live loop, so building
+    # extra reasoning chains here only adds duplicate latency.
+    remaining_reasoning_budget = 0
+    shared_results = {}
 
     for topic in TOPIC_QUERIES:
-        result = run_ingestion_cycle(
-            query=topic["query"],
-            max_records_per_source=max_records_per_source,
-            enabled_sources=topic.get("enabled_sources", []),
-            reasoning_budget=remaining_reasoning_budget,
-        )
+        topic_started = time.time()
+        active_sources = _active_sources(topic.get("enabled_sources", []))
+        reuse_key = tuple(sorted(active_sources)) if active_sources and set(active_sources).issubset(QUERY_INSENSITIVE_SOURCES) else None
+        reused = False
+        if reuse_key and reuse_key in shared_results:
+            result = deepcopy(shared_results[reuse_key])
+            reused = True
+            topic_duration = round(max(0.0, time.time() - topic_started), 3)
+            totals["reused_topic_runs"] += 1
+        else:
+            result = run_ingestion_cycle(
+                query=topic["query"],
+                max_records_per_source=max_records_per_source,
+                enabled_sources=topic.get("enabled_sources", []),
+                reasoning_budget=remaining_reasoning_budget,
+            )
+            topic_duration = round(max(0.0, time.time() - topic_started), 3)
+            totals["actual_ingestion_cycles"] += 1
+            if reuse_key:
+                shared_results[reuse_key] = deepcopy(result)
 
         totals["topic_runs"] += 1
-        totals["items_fetched"] += int(result.get("items_fetched", 0))
-        totals["items_kept"] += int(result.get("items_kept", 0))
-        totals["alerts_created"] += int(result.get("alerts_created", 0))
-        totals["errors"].extend(result.get("errors", []))
-        totals["reasoning_chains_built"] += int(result.get("reasoning_chains_built", 0) or 0)
-        remaining_reasoning_budget = max(0, remaining_reasoning_budget - int(result.get("reasoning_chains_built", 0) or 0))
         topic_llm = result.get("llm_metrics", {}) or {}
-        totals["llm_metrics"]["eligible_articles"] += int(topic_llm.get("eligible_articles", 0) or 0)
-        totals["llm_metrics"]["eligible_clusters"] += int(topic_llm.get("eligible_clusters", 0) or 0)
-        totals["llm_metrics"]["llm_calls_made"] += int(topic_llm.get("llm_calls_made", 0) or 0)
-        totals["llm_metrics"]["article_calls_made"] += int(topic_llm.get("article_calls_made", 0) or 0)
-        totals["llm_metrics"]["cluster_calls_made"] += int(topic_llm.get("cluster_calls_made", 0) or 0)
-        totals["llm_metrics"]["fallback_articles"] += int(topic_llm.get("fallback_articles", 0) or 0)
-        for reason, count in (topic_llm.get("fallback_reasons", {}) or {}).items():
-            totals["llm_metrics"]["fallback_reasons"][reason] = (
-                int(totals["llm_metrics"]["fallback_reasons"].get(reason, 0) or 0)
-                + int(count or 0)
-            )
+        if not reused:
+            totals["items_fetched"] += int(result.get("items_fetched", 0))
+            totals["items_kept"] += int(result.get("items_kept", 0))
+            totals["alerts_created"] += int(result.get("alerts_created", 0))
+            totals["errors"].extend(result.get("errors", []))
+            totals["reasoning_chains_built"] += int(result.get("reasoning_chains_built", 0) or 0)
+            remaining_reasoning_budget = max(0, remaining_reasoning_budget - int(result.get("reasoning_chains_built", 0) or 0))
+            totals["llm_metrics"]["eligible_articles"] += int(topic_llm.get("eligible_articles", 0) or 0)
+            totals["llm_metrics"]["eligible_clusters"] += int(topic_llm.get("eligible_clusters", 0) or 0)
+            totals["llm_metrics"]["llm_calls_made"] += int(topic_llm.get("llm_calls_made", 0) or 0)
+            totals["llm_metrics"]["article_calls_made"] += int(topic_llm.get("article_calls_made", 0) or 0)
+            totals["llm_metrics"]["cluster_calls_made"] += int(topic_llm.get("cluster_calls_made", 0) or 0)
+            totals["llm_metrics"]["fallback_articles"] += int(topic_llm.get("fallback_articles", 0) or 0)
+            for reason, count in (topic_llm.get("fallback_reasons", {}) or {}).items():
+                totals["llm_metrics"]["fallback_reasons"][reason] = (
+                    int(totals["llm_metrics"]["fallback_reasons"].get(reason, 0) or 0)
+                    + int(count or 0)
+                )
         totals["topics"].append(
             {
                 "name": topic["name"],
                 "status": result.get("status", "unknown"),
-                "items_fetched": result.get("items_fetched", 0),
-                "items_kept": result.get("items_kept", 0),
-                "items_suppressed": result.get("items_suppressed", 0),
-                "alerts_created": result.get("alerts_created", 0),
-                "reasoning_chains_built": result.get("reasoning_chains_built", 0),
-                "used_sources": result.get("used_sources", []),
-                "llm_metrics": topic_llm,
+                "items_fetched": 0 if reused else result.get("items_fetched", 0),
+                "items_kept": 0 if reused else result.get("items_kept", 0),
+                "items_suppressed": 0 if reused else result.get("items_suppressed", 0),
+                "alerts_created": 0 if reused else result.get("alerts_created", 0),
+                "reasoning_chains_built": 0 if reused else result.get("reasoning_chains_built", 0),
+                "duration_seconds": topic_duration,
+                "source_timings": (
+                    [{"source": ",".join(active_sources) or "none", "status": "reused", "items_fetched": 0, "duration_seconds": 0.0}]
+                    if reused
+                    else result.get("source_timings", [])
+                ),
+                "used_sources": active_sources if reused else result.get("used_sources", []),
+                "llm_metrics": {} if reused else topic_llm,
+                "substep_durations": {} if reused else result.get("substep_durations", {}),
+                "reused": reused,
+                "reuse_key": list(reuse_key) if reuse_key else [],
             }
         )
 
@@ -188,5 +255,6 @@ def run_agent_cycle(max_records_per_source: int = None) -> Dict:
         for x in payload.get("cards", [])[:10]
     ]
     totals["gdelt_state"] = _gdelt_state()
+    totals["duration_seconds"] = round(max(0.0, time.time() - started), 3)
 
     return totals

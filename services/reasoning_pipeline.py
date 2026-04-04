@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -383,6 +384,7 @@ def _process_rows(
 
 
 def process_unreasoned_articles(db_path=None, max_articles: int = 50, budget_allocation: Dict = None) -> Dict:
+    started = time.time()
     db_path = db_path or DB_PATH
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -419,10 +421,12 @@ def process_unreasoned_articles(db_path=None, max_articles: int = 50, budget_all
     conn.commit()
     conn.close()
     stats["llm_observability"] = llm.recent_summary()
+    stats["duration_seconds"] = round(max(0.0, time.time() - started), 3)
     return stats
 
 
 def process_web_sourced_articles(db_path=None, max_articles: int = 20, budget_allocation: Dict = None) -> Dict:
+    started = time.time()
     db_path = db_path or DB_PATH
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -452,4 +456,5 @@ def process_web_sourced_articles(db_path=None, max_articles: int = 20, budget_al
     conn.commit()
     conn.close()
     stats["llm_observability"] = llm.recent_summary()
+    stats["duration_seconds"] = round(max(0.0, time.time() - started), 3)
     return stats

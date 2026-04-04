@@ -132,7 +132,7 @@
       if (!wrap) return;
       const rows = gcLearnedRules || [];
       if (!rows.length){
-        wrap.innerHTML = '<div class="empty">No learned rules yet. As more predictions verify, the agent will promote recurring keywords into its own rule book.</div>';
+        wrap.innerHTML = '<div class="empty">Not enough verified prediction history yet.</div>';
         return;
       }
       wrap.innerHTML = `
