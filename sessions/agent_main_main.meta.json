@@ -1,0 +1,8 @@
+{
+  "key": "agent:main:main",
+  "summary": "[Emergency compression dropped 8 oldest messages due to context limit]\n\n[Emergency compression dropped 6 oldest messages due to context limit]\n\n[Emergency compression dropped 10 oldest messages due to context limit]",
+  "skip": 0,
+  "count": 4,
+  "created_at": "2026-04-07T21:14:27.282096+01:00",
+  "updated_at": "2026-04-07T22:36:09.121727+01:00"
+}

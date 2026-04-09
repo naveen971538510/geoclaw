@@ -1,9 +1,4 @@
-import React from "react";
-import { createRoot } from "react-dom/client";
-import App from "./App.jsx";
+import "@dashboard/styles.css";
+import { mountDashboardApp } from "@dashboard/bootstrap.jsx";
 
-createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+mountDashboardApp();

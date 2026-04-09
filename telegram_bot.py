@@ -11,12 +11,14 @@ import logging
 import os
 import sys
 import time
+
+import requests
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -24,7 +26,10 @@ if str(ROOT) not in sys.path:
 
 logger = logging.getLogger("geoclaw.telegram_polling")
 
-DEFAULT_ASK_URL = "http://127.0.0.1:8000/api/ask"
+DEFAULT_ASK_URL = "http://127.0.0.1:8001/api/ask"
+DEFAULT_BRIEFING_URL = "http://127.0.0.1:8001/api/briefing"
+DEFAULT_NEWS_URL = "http://127.0.0.1:8001/api/news"
+DEFAULT_SCENARIOS_URL = "http://127.0.0.1:8001/api/scenarios"
 
 
 def _api_base(token: str) -> str:
@@ -227,36 +232,66 @@ def cmd_charts_html() -> str:
 
 
 def cmd_briefing_html() -> str:
-    from intelligence.db import query_all
-    from intelligence.groq_briefing import build_signals_context, generate_dashboard_briefing
+    """GET dashboard briefing JSON; body text is the `briefing` field."""
+    url = (os.environ.get("GEOCLAW_DASHBOARD_BRIEFING_URL") or DEFAULT_BRIEFING_URL).strip()
+    try:
+        resp = __import__("requests").get(url, timeout=30)
+        data = resp.json()
+    except Exception as exc:
+        return f"<b>Briefing error</b>\n{html.escape(str(exc))}"
 
-    since = datetime.now(timezone.utc) - timedelta(hours=48)
-    signals = query_all(
-        """
-        SELECT signal_name, direction, confidence, explanation_plain_english, ts
-        FROM geoclaw_signals WHERE ts >= %s ORDER BY confidence DESC LIMIT 25;
-        """,
-        (since,),
-    )
-    macro = query_all(
-        """
-        SELECT DISTINCT ON (metric_name)
-            metric_name, value, previous_value, pct_change, observed_at
-        FROM macro_signals
-        ORDER BY metric_name, observed_at DESC;
-        """
-    )
-    charts = query_all(
-        """
-        SELECT ticker, pattern_name, direction, confidence, detected_at
-        FROM chart_signals
-        ORDER BY detected_at DESC LIMIT 15;
-        """
-    )
-    ctx = build_signals_context(signals, macro, charts)
-    text = generate_dashboard_briefing(ctx)
+    if data.get("status") == "error":
+        return f"<b>Briefing error</b>\n{html.escape(str(data.get('error') or data))}"
+
+    text = str(data.get("briefing") or "").strip()
+    if not text:
+        return "<b>GeoClaw briefing</b>\nNo briefing text in response."
+
+    meta = data.get("generated_at")
+    header = "<b>GeoClaw briefing</b>"
+    if meta:
+        header += f"\n<i>{html.escape(str(meta))}</i>"
     safe = html.escape(text)
-    return f"<b>GeoClaw briefing</b>\n\n{safe}"
+    return f"{header}\n\n{safe}"
+
+
+def cmd_news_html() -> str:
+    url = (os.environ.get("GEOCLAW_DASHBOARD_NEWS_URL") or DEFAULT_NEWS_URL).strip()
+    try:
+        resp = requests.get(url, timeout=30)
+        data = resp.json()
+    except Exception as exc:
+        return f"<b>News error</b>\n{html.escape(str(exc))}"
+    if data.get("status") == "error":
+        return f"<b>News error</b>\n{html.escape(str(data.get('error') or data))}"
+    rows = (data.get("news") or [])[:5]
+    if not rows:
+        return "<b>News signals</b>\nNo items in the last 24h."
+    lines = ["<b>Top 5 news signals</b>\n"]
+    for r in rows:
+        sent = str(r.get("sentiment") or "").upper()
+        em = _emoji_dir(sent)
+        hl = html.escape(str(r.get("headline") or ""))
+        src = html.escape(str(r.get("source") or ""))
+        conf = int(r.get("confidence") or 0)
+        reason = html.escape(str(r.get("reason") or ""))
+        lines.append(f"{em} <b>{sent}</b> ({conf}%) — {hl}\n<i>{src}</i>\n{reason}\n")
+    return "\n".join(lines)
+
+
+def cmd_scenarios_html() -> str:
+    url = (os.environ.get("GEOCLAW_DASHBOARD_SCENARIOS_URL") or DEFAULT_SCENARIOS_URL).strip()
+    try:
+        resp = requests.get(url, timeout=120)
+        data = resp.json()
+    except Exception as exc:
+        return f"<b>Scenarios error</b>\n{html.escape(str(exc))}"
+    if data.get("status") == "error":
+        return f"<b>Scenarios error</b>\n{html.escape(str(data.get('error') or data))}"
+    text = str(data.get("scenarios") or "").strip()
+    if not text:
+        return "<b>Scenarios</b>\nEmpty response."
+    return f"<b>Market scenarios (30d)</b>\n\n{html.escape(text)}"
 
 
 def cmd_help_html() -> str:
@@ -265,7 +300,9 @@ def cmd_help_html() -> str:
         "/signals — top 5 scored macro signals (24h)\n"
         "/macro — latest CPI, Fed, jobs, GDP, yields table\n"
         "/charts — recent candlestick patterns\n"
-        "/briefing — AI market briefing (Groq)\n"
+        "/briefing — AI market briefing (GET dashboard <code>/api/briefing</code>)\n"
+        "/news — top news headlines with sentiment (dashboard <code>/api/news</code>)\n"
+        "/scenarios — 30-day bull/base/bear scenarios\n"
         "/help — this message\n\n"
         "Anything else is sent to GeoClaw <code>/api/ask</code>."
     )
@@ -280,9 +317,20 @@ def dispatch_command(text: str) -> Optional[str]:
     cmd = parts[0]
     if cmd in ("/help", "/start"):
         return cmd_help_html()
+    if cmd in ("/briefing", "/brefing"):
+        try:
+            if cmd == "/brefing":
+                logger.warning("Received deprecated /brefing command; routing to /briefing handler")
+            return cmd_briefing_html()
+        except Exception as exc:
+            return f"<b>Briefing error</b> {html.escape(str(exc))}"
+    if cmd == "/news":
+        return cmd_news_html()
+    if cmd == "/scenarios":
+        return cmd_scenarios_html()
     if not _db_ok():
         return (
-            "<b>Database not configured</b>\nSet <code>DATABASE_URL</code> for /signals, /macro, /charts, /briefing."
+            "<b>Database not configured</b>\nSet <code>DATABASE_URL</code> for /signals, /macro, /charts."
         )
     try:
         from intelligence.db import ensure_intelligence_schema
@@ -305,11 +353,6 @@ def dispatch_command(text: str) -> Optional[str]:
             return cmd_charts_html()
         except Exception as exc:
             return f"<b>Error</b> {html.escape(str(exc))}"
-    if cmd == "/briefing":
-        try:
-            return cmd_briefing_html()
-        except Exception as exc:
-            return f"<b>Briefing error</b> {html.escape(str(exc))}"
     return None
 
 

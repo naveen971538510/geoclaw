@@ -1,18 +1,35 @@
 """
 Groq Cloud API (OpenAI-compatible) for market briefings.
-Default model: llama3-8b-8192 (override with GROQ_MODEL).
+Falls back to Google Gemini 1.5 Flash if Groq fails or returns non-200.
+Default model: llama-3.1-8b-instant (override with GROQ_MODEL).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 from typing import Any, Dict, List, Optional
 
-GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_MODEL = "llama3-8b-8192"
+import requests
+
+DEFAULT_MODEL = "llama-3.1-8b-instant"
+
+
+def _gemini_completion(messages: List[Dict[str, str]]) -> str:
+    import google.generativeai as genai
+
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key or not str(gemini_key).strip():
+        raise RuntimeError("GEMINI_API_KEY is not set")
+    os.environ["GEMINI_API_KEY"] = str(gemini_key).strip()
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt = messages[-1]["content"]
+    response = model.generate_content(prompt)
+    text = getattr(response, "text", None) or ""
+    if not text and getattr(response, "candidates", None):
+        parts = response.candidates[0].content.parts
+        text = "".join(getattr(p, "text", "") for p in parts)
+    return str(text).strip()
 
 
 def groq_chat_completion(
@@ -21,38 +38,48 @@ def groq_chat_completion(
     temperature: float = 0.5,
     max_tokens: int = 1200,
 ) -> str:
-    key = (os.environ.get("GROQ_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("GROQ_API_KEY is not set")
-    model = (model or os.environ.get("GROQ_MODEL") or DEFAULT_MODEL).strip()
-    body = json.dumps(
-        {
+    groq_err: Optional[str] = None
+    api_key = os.environ.get("GROQ_API_KEY")
+    if api_key and str(api_key).strip():
+        api_key = str(api_key).strip()
+        model = (model or os.environ.get("GROQ_MODEL") or DEFAULT_MODEL).strip()
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        GROQ_CHAT_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-        },
-        method="POST",
-    )
+        try:
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=90,
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Groq HTTP {resp.status_code}: {resp.text[:800]}")
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError(f"Groq empty response: {data}")
+            msg = choices[0].get("message") or {}
+            return str(msg.get("content") or "").strip()
+        except Exception as exc:
+            groq_err = str(exc)
+    else:
+        groq_err = "GROQ_API_KEY is not set"
+
+    gemini_err: Optional[str] = None
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        err = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Groq HTTP {exc.code}: {err[:800]}") from exc
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError(f"Groq empty response: {data}")
-    msg = choices[0].get("message") or {}
-    return str(msg.get("content") or "").strip()
+        return _gemini_completion(messages)
+    except Exception as exc:
+        gemini_err = str(exc)
+
+    raise RuntimeError(f"Groq failed: {groq_err}; Gemini failed: {gemini_err}")
 
 
 def build_signals_context(signals: List[Dict[str, Any]], macro: List[Dict[str, Any]], charts: List[Dict[str, Any]]) -> str:

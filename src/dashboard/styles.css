@@ -1,0 +1,72 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap");
+@config "../../ui/dashboard/tailwind.config.js";
+@import "tailwindcss";
+@source "./**/*.{js,jsx}";
+@source "../../ui/dashboard/src/**/*.{js,jsx}";
+@source "../../ui/dashboard/index.html";
+
+@theme {
+  --font-sans: "Space Grotesk", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, monospace;
+}
+
+:root {
+  --gc-bg: #050b12;
+  --gc-panel: rgba(8, 18, 31, 0.82);
+  --gc-panel-strong: rgba(10, 22, 38, 0.96);
+  --gc-line: rgba(132, 158, 197, 0.18);
+  --gc-line-strong: rgba(132, 158, 197, 0.34);
+  --gc-copy: #d8e2f0;
+  --gc-copy-soft: #8ea0b9;
+  --gc-bull: #39d98a;
+  --gc-bear: #ff6b6b;
+  --gc-neutral: #f5b04c;
+  --gc-accent: #6bc5ff;
+  --gc-glow: rgba(107, 197, 255, 0.18);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--gc-copy);
+  background:
+    radial-gradient(circle at top left, rgba(33, 84, 146, 0.24), transparent 30%),
+    radial-gradient(circle at top right, rgba(3, 120, 94, 0.12), transparent 24%),
+    linear-gradient(180deg, #06111c 0%, #050b12 55%, #03060b 100%);
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(125, 151, 183, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 151, 183, 0.045) 1px, transparent 1px);
+  background-size: 64px 64px;
+  content: "";
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 92%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(132, 158, 197, 0.2);
+}
+
+.gc-panel {
+  background: var(--gc-panel);
+  backdrop-filter: blur(18px);
+}
