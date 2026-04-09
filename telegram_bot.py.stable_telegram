@@ -1,0 +1,76 @@
+import requests
+import time
+
+BOT_TOKEN = "8660540375:AAHYZzjDliD5ILrdzMLC8mXmXOA3gnVpQNs"
+API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+GEOCLAW_URL = "http://127.0.0.1:8000/api/ask"
+
+HELP_TRIGGERS = {"hello", "hi", "hey", "help", "/help", "/hello"}
+
+START_MSG = (
+    "🌍 GeoClaw Intelligence\n\n"
+    "Ask me about geopolitics, oil, sanctions, markets, war risk, Fed guidance, or top theses.\n\n"
+    "Examples:\n"
+    "- what is driving oil right now\n"
+    "- latest iran risk\n"
+    "- top confirmed theses\n"
+    "- what is happening in gas markets"
+)
+
+HELP_MSG = (
+    "Send a real research question.\n\n"
+    "Examples:\n"
+    "- what is driving oil right now\n"
+    "- latest iran risk\n"
+    "- top confirmed theses"
+)
+
+def send_message(chat_id, text):
+    requests.post(f"{API_URL}/sendMessage", json={
+        "chat_id": chat_id,
+        "text": text
+    })
+
+def get_updates(offset=None):
+    params = {"timeout": 30, "offset": offset}
+    try:
+        r = requests.get(f"{API_URL}/getUpdates", params=params, timeout=35)
+        return r.json().get("result", [])
+    except Exception:
+        return []
+
+def ask_geoclaw(question):
+    try:
+        r = requests.get(GEOCLAW_URL, params={"q": question}, timeout=30)
+        data = r.json()
+        answer = data.get("answer") or data.get("result") or str(data)
+        return answer.replace("\\n", "\n")
+    except Exception as e:
+        return f"GeoClaw error: {e}"
+
+def handle_message(message):
+    chat_id = message["chat"]["id"]
+    text = message.get("text", "").strip()
+    lower = text.lower()
+
+    if lower == "/start":
+        send_message(chat_id, START_MSG)
+    elif lower in HELP_TRIGGERS:
+        send_message(chat_id, HELP_MSG)
+    else:
+        reply = ask_geoclaw(text)
+        send_message(chat_id, reply)
+
+def main():
+    print("GeoClaw Telegram bot starting...")
+    offset = None
+    while True:
+        updates = get_updates(offset)
+        for update in updates:
+            offset = update["update_id"] + 1
+            if "message" in update:
+                handle_message(update["message"])
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()

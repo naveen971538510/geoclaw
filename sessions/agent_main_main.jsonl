@@ -1,0 +1,4 @@
+{"role":"user","content":"Use read_file on ./telegram_bot.py only. In 3 short bullet points, describe exactly what this file does. Use only the file content."}
+{"role":"user","content":"Use read_file on ./telegram_bot.py only. Return only the first 30 lines exactly as plain text. Do not summarize."}
+{"role":"user","content":"Use read_file on ./telegram_bot.py only. Return only line 1 through line 20 exactly as plain text."}
+{"role":"user","content":"Use read_file on ./FILE.py only. In 3 short bullet points, describe exactly what this file does. Use only the file content."}

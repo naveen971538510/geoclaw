@@ -1,19 +1,18 @@
 """
-GeoClaw macro data agent: FRED + BLS → Postgres macro_signals.
-Runs every 60 minutes; on error logs and retries after 5 minutes.
+GeoClaw macro data agent: live FRED CSV + BLS NFP -> Postgres macro_signals.
+Runs on startup and every 24 hours.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import os
 import sys
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,20 +25,19 @@ from intelligence.db import ensure_intelligence_schema, get_connection, get_data
 
 LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "macro_agent.log"
-INTERVAL_OK_SEC = 60 * 60
+INTERVAL_OK_SEC = 24 * 60 * 60
 INTERVAL_ERR_SEC = 5 * 60
 
-FRED_OBS_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
 BLS_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 
-# FRED series IDs
 SERIES = {
-    "CPI_LEVEL": "CPIAUCSL",
+    "CPIAUCSL": "CPIAUCSL",
     "FEDFUNDS": "FEDFUNDS",
     "UNRATE": "UNRATE",
-    "GDP_GROWTH": "A191RL1Q225SBEA",  # Real GDP % change q/q
-    "TREASURY_10Y": "DGS10",
-    "TREASURY_2Y": "DGS2",
+    "GDP": "GDP",
+    "TREASURY_10Y": "GS10",
+    "TREASURY_2Y": "GS2",
 }
 
 logger = logging.getLogger("macro_agent")
@@ -60,34 +58,24 @@ def _setup_logging() -> None:
     root.addHandler(sh)
 
 
-def _fred_key() -> str:
-    return (os.environ.get("FRED_API_KEY") or "").strip()
-
-
-def fetch_fred_observations(series_id: str, limit: int = 24) -> List[Tuple[datetime, float]]:
-    key = _fred_key()
-    if not key:
-        raise RuntimeError("FRED_API_KEY is not set")
-    params = {
-        "series_id": series_id,
-        "api_key": key,
-        "file_type": "json",
-        "sort_order": "desc",
-        "limit": str(limit),
-    }
-    url = f"{FRED_OBS_URL}?{urllib.parse.urlencode(params)}"
+def fetch_fred_csv_observations(series_id: str, limit: int = 40) -> List[Tuple[datetime, float]]:
+    url = FRED_CSV_URL.format(series_id=series_id)
     with urllib.request.urlopen(url, timeout=45) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    obs = data.get("observations") or []
+        raw = resp.read().decode("utf-8", errors="replace")
+    rows = list(csv.DictReader(raw.splitlines()))
     out: List[Tuple[datetime, float]] = []
-    for row in obs:
-        d_raw = row.get("date")
-        v_raw = row.get("value")
-        if not d_raw or v_raw in (".", None, ""):
+    for row in rows:
+        d_raw = str(row.get("DATE") or "").strip()
+        v_raw = str(row.get(series_id) or "").strip()
+        if not d_raw or not v_raw or v_raw == ".":
             continue
-        dt = datetime.strptime(d_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        out.append((dt, float(v_raw)))
-    return out
+        try:
+            dt = datetime.strptime(d_raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            out.append((dt, float(v_raw)))
+        except Exception:
+            continue
+    out.sort(key=lambda x: x[0], reverse=True)
+    return out[:limit]
 
 
 def _store_macro(
@@ -124,8 +112,8 @@ def _store_macro(
         cur.close()
 
 
-def ingest_fred_series(internal_name: str, fred_id: str) -> None:
-    pts = fetch_fred_observations(fred_id, limit=3)
+def ingest_fred_series(metric_name: str, fred_id: str) -> None:
+    pts = fetch_fred_csv_observations(fred_id, limit=3)
     if len(pts) < 1:
         return
     latest_dt, latest_v = pts[0]
@@ -133,12 +121,12 @@ def ingest_fred_series(internal_name: str, fred_id: str) -> None:
     pct = None
     if prev_v is not None and prev_v != 0:
         pct = (latest_v - prev_v) / abs(prev_v) * 100.0
-    _store_macro(internal_name, latest_dt, latest_v, prev_v, pct, {"fred_id": fred_id})
+    _store_macro(metric_name, latest_dt, latest_v, prev_v, pct, {"fred_id": fred_id})
 
 
 def ingest_cpi_yoy() -> None:
     """CPI year-over-year % change from CPIAUCSL."""
-    pts = fetch_fred_observations(SERIES["CPI_LEVEL"], limit=14)
+    pts = fetch_fred_csv_observations(SERIES["CPIAUCSL"], limit=14)
     if len(pts) < 13:
         return
     latest_dt, latest_v = pts[0]
@@ -159,7 +147,30 @@ def ingest_cpi_yoy() -> None:
         yoy,
         prev_yoy,
         pct_delta,
-        {"fred_id": SERIES["CPI_LEVEL"], "note": "year_over_year_percent"},
+        {"fred_id": SERIES["CPIAUCSL"], "note": "year_over_year_percent"},
+    )
+
+
+def ingest_gdp_growth() -> None:
+    pts = fetch_fred_csv_observations(SERIES["GDP"], limit=3)
+    if len(pts) < 2:
+        return
+    latest_dt, latest = pts[0]
+    prev = pts[1][1]
+    if prev == 0:
+        return
+    qoq = (latest - prev) / abs(prev) * 100.0
+    prev_qoq = None
+    if len(pts) >= 3 and pts[2][1] != 0:
+        prev_qoq = (prev - pts[2][1]) / abs(pts[2][1]) * 100.0
+    pct_delta = (qoq - prev_qoq) if prev_qoq is not None else None
+    _store_macro(
+        "GDP_GROWTH",
+        latest_dt,
+        qoq,
+        prev_qoq,
+        pct_delta,
+        {"fred_id": SERIES["GDP"], "note": "qoq_percent_from_level"},
     )
 
 
@@ -213,7 +224,10 @@ def ingest_bls_nfp() -> None:
     mom = latest_level - prev_level
     prior_mom = prev_level - prior_prior_level
     mom_pct = ((latest_level - prev_level) / prev_level * 100.0) if prev_level else None
-    obs_date = datetime.now(timezone.utc)
+    # Use release month as deterministic observed_at to avoid per-run duplicates.
+    latest_year = int(latest_label.split("-")[0])
+    latest_month = int(latest_label.split("-")[1].replace("M", ""))
+    obs_date = datetime(latest_year, latest_month, 1, tzinfo=timezone.utc)
     _store_macro(
         "NFP_LEVEL_THOUSANDS",
         obs_date,
@@ -236,13 +250,12 @@ def run_ingestion_once() -> None:
     if not get_database_url():
         raise RuntimeError("DATABASE_URL is not set")
     ensure_intelligence_schema()
-    if not _fred_key():
-        raise RuntimeError("FRED_API_KEY is not set")
     ingest_cpi_yoy()
-    for name, fid in SERIES.items():
-        if name == "CPI_LEVEL":
-            continue
-        ingest_fred_series(name, fid)
+    ingest_fred_series("FEDFUNDS", SERIES["FEDFUNDS"])
+    ingest_fred_series("UNRATE", SERIES["UNRATE"])
+    ingest_fred_series("TREASURY_10Y", SERIES["TREASURY_10Y"])
+    ingest_fred_series("TREASURY_2Y", SERIES["TREASURY_2Y"])
+    ingest_gdp_growth()
     ingest_bls_nfp()
     # Run signal engine after fresh macro data
     from intelligence.signal_engine import run_signal_engine
@@ -256,7 +269,7 @@ def main() -> None:
     while True:
         try:
             run_ingestion_once()
-            logger.info("macro ingestion cycle complete")
+            logger.info("macro ingestion cycle complete; next in 24h")
             time.sleep(INTERVAL_OK_SEC)
         except Exception as exc:
             logger.exception("macro ingestion failed: %s", exc)

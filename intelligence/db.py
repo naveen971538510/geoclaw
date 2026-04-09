@@ -76,6 +76,12 @@ def ensure_intelligence_schema() -> None:
         )
         cur.execute(
             """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_geoclaw_signals_name_dir_day
+            ON geoclaw_signals (signal_name, direction, (DATE(ts)));
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS chart_signals (
                 id SERIAL PRIMARY KEY,
                 ticker VARCHAR(32) NOT NULL,
@@ -89,7 +95,68 @@ def ensure_intelligence_schema() -> None:
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS price_data (
+                id SERIAL PRIMARY KEY,
+                ticker VARCHAR(20) NOT NULL,
+                price DOUBLE PRECISION NOT NULL,
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_price_data_ticker_ts ON price_data (ticker, ts DESC);
+            """
+        )
+        cur.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_chart_signals_detected ON chart_signals (detected_at DESC);
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS news_signals (
+                id SERIAL PRIMARY KEY,
+                headline TEXT NOT NULL,
+                source VARCHAR(100) NOT NULL,
+                url TEXT,
+                sentiment VARCHAR(20) NOT NULL,
+                confidence INT NOT NULL,
+                reason TEXT,
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_news_signals_ts ON news_signals (ts DESC);
+            """
+        )
+        # One-time dedupe safety for pre-existing macro_signals duplicates.
+        cur.execute(
+            """
+            DELETE FROM macro_signals m
+            USING macro_signals d
+            WHERE m.metric_name = d.metric_name
+              AND m.observed_at = d.observed_at
+              AND m.id < d.id;
+            """
+        )
+        # Ensure upsert target exists even on legacy DBs that were created before constraints.
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'macro_signals_metric_name_observed_at_key'
+                ) THEN
+                    ALTER TABLE macro_signals
+                    ADD CONSTRAINT macro_signals_metric_name_observed_at_key
+                    UNIQUE (metric_name, observed_at);
+                END IF;
+            END$$;
             """
         )
         cur.close()
