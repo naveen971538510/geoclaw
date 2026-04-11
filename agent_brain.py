@@ -23,7 +23,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +49,21 @@ _load_local_env(ENV_FILE)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+STATUS_FILE = ROOT / "logs" / "agent_brain.status.json"
+SIGNAL_SNAPSHOT_LIMIT = 20
+SIGNAL_FRESHNESS_HOURS = 48
+MACRO_FRESHNESS_DAYS = {
+    "TREASURY_10Y": 14,
+    "TREASURY_2Y": 14,
+    "CPI_YOY_PCT": 75,
+    "FEDFUNDS": 75,
+    "UNRATE": 75,
+    "NFP_LEVEL_THOUSANDS": 75,
+    "NFP_MOM_THOUSANDS": 75,
+    "GDP_GROWTH": 130,
+}
+REQUIRED_MACRO_METRICS = tuple(MACRO_FRESHNESS_DAYS.keys())
+_CURRENT_RUN_STATE: Optional[Dict[str, Any]] = None
 
 logger = logging.getLogger("geoclaw.agent_brain")
 logging.basicConfig(
@@ -118,16 +133,83 @@ TOOLS = [
 # TOOL IMPLEMENTATIONS
 # ─────────────────────────────────────────────
 
-def tool_get_latest_signals(limit: int = 10) -> Dict:
+
+def _new_run_state() -> Dict[str, Any]:
+    started_at = datetime.now(timezone.utc)
+    return {
+        "run_id": started_at.strftime("%Y%m%dT%H%M%SZ"),
+        "started_at": started_at.isoformat(),
+        "degraded_mode": False,
+        "degradation_notes": [],
+        "degradation_codes": set(),
+        "groq_result": {"status": "not_called"},
+    }
+
+
+def _run_state_for_tool(run_state: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    return run_state if run_state is not None else _CURRENT_RUN_STATE
+
+
+def _mark_degraded(run_state: Optional[Dict[str, Any]], code: str, detail: str) -> None:
+    if run_state is None:
+        return
+    codes = run_state.setdefault("degradation_codes", set())
+    if code in codes:
+        return
+    codes.add(code)
+    run_state["degraded_mode"] = True
+    note = f"{code}: {detail}"
+    run_state.setdefault("degradation_notes", []).append(note)
+    logger.warning("degraded_mode run_id=%s code=%s detail=%s", run_state.get("run_id"), code, detail)
+
+
+def _run_status(run_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if run_state is None:
+        return {"run_id": "", "degraded_mode": False, "degradation_notes": []}
+    return {
+        "run_id": run_state.get("run_id", ""),
+        "started_at": run_state.get("started_at", ""),
+        "degraded_mode": bool(run_state.get("degraded_mode")),
+        "degradation_notes": list(run_state.get("degradation_notes", [])),
+        "groq_result": dict(run_state.get("groq_result", {})),
+        "last_price_refresh_time": run_state.get("last_price_refresh_time", ""),
+        "last_telegram_send_time": run_state.get("last_telegram_send_time", ""),
+    }
+
+
+def _attach_run_status(tool_state: Dict[str, Any], run_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    tool_state["_run"] = _run_status(run_state)
+    return tool_state
+
+
+def _json_serial(obj: Any) -> str:
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, set):
+        return sorted(str(item) for item in obj)
+    return str(obj)
+
+
+def tool_get_latest_signals(limit: int = 10, run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
     try:
         from intelligence.db import ensure_intelligence_schema, query_all, get_database_url
-        from datetime import timedelta
         if not get_database_url():
+            _mark_degraded(run_state, "signals_unavailable", "DATABASE_URL not set")
             return {"error": "DATABASE_URL not set", "signals": []}
+        requested_limit = max(1, int(limit))
+        if run_state is not None and "signals_snapshot" in run_state:
+            signals = run_state["signals_snapshot"][:requested_limit]
+            return {
+                "signals": signals,
+                "count": len(signals),
+                "freshness": run_state.get("signal_freshness") or _signal_freshness(signals),
+            }
+
         ensure_intelligence_schema()
         since = datetime.now(timezone.utc) - timedelta(hours=48)
-        requested_limit = max(1, int(limit))
-        fetch_limit = requested_limit * 3
+        snapshot_limit = max(requested_limit, SIGNAL_SNAPSHOT_LIMIT) if run_state is not None else requested_limit
+        fetch_limit = snapshot_limit * 3
         rows = query_all(
             """
             SELECT signal_name, direction, confidence, explanation_plain_english, ts
@@ -138,19 +220,40 @@ def tool_get_latest_signals(limit: int = 10) -> Dict:
             """,
             (since, fetch_limit),
         )
-        signals = _dedupe_signals([dict(r) for r in rows])[:requested_limit]
-        return {"signals": signals, "count": len(signals)}
+        snapshot = _dedupe_signals([dict(r) for r in rows])[:snapshot_limit]
+        if run_state is not None:
+            run_state["signals_snapshot"] = snapshot
+        freshness = _signal_freshness(snapshot)
+        if run_state is not None:
+            run_state["signal_freshness"] = freshness
+        if not snapshot:
+            _mark_degraded(run_state, "signals_missing", "no fresh BUY/SELL signals in the 48h window")
+        elif freshness.get("status") != "ok":
+            _mark_degraded(run_state, "signal_freshness_failed", str(freshness))
+        signals = snapshot[:requested_limit]
+        return {"signals": signals, "count": len(signals), "freshness": freshness}
     except Exception as e:
+        _mark_degraded(run_state, "signals_error", str(e))
         return {"error": str(e), "signals": []}
 
 
-def tool_run_signal_engine() -> Dict:
+def tool_run_signal_engine(run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    if run_state is not None and "run_signal_engine" in run_state:
+        return run_state["run_signal_engine"]
     try:
         from intelligence.signal_engine import run_signal_engine
         run_signal_engine()
-        return {"status": "ok", "message": "Signal engine completed successfully"}
+        result = {"status": "ok", "message": "Signal engine completed successfully"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        result = {"status": "error", "message": str(e)}
+        _mark_degraded(run_state, "signal_engine_error", str(e))
+    if run_state is not None:
+        run_state["run_signal_engine"] = result
+        if result.get("status") == "ok":
+            run_state.pop("signals_snapshot", None)
+            run_state.pop("market_bias", None)
+    return result
 
 
 def _refresh_price_data_from_feed() -> Dict:
@@ -207,12 +310,29 @@ def _refresh_price_data_from_feed() -> Dict:
         return {"status": "error", "message": str(e), "inserted": 0}
 
 
-def tool_get_price_data() -> Dict:
+def _refresh_price_data_once(run_state: Optional[Dict[str, Any]]) -> Dict:
+    if run_state is not None and "price_refresh" in run_state:
+        return run_state["price_refresh"]
+    refresh = _refresh_price_data_from_feed()
+    if run_state is not None:
+        run_state["price_refresh"] = refresh
+    if refresh.get("status") == "ok" and int(refresh.get("inserted") or 0) > 0:
+        if run_state is not None:
+            run_state["last_price_refresh_time"] = datetime.now(timezone.utc).isoformat()
+        logger.info("Price refresh result: %s", json.dumps(refresh))
+    else:
+        _mark_degraded(run_state, "price_refresh_failed", str(refresh.get("message") or refresh))
+    return refresh
+
+
+def tool_get_price_data(run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    if run_state is not None and "price_data" in run_state:
+        return run_state["price_data"]
     try:
         from intelligence.db import query_all
 
-        refresh = _refresh_price_data_from_feed()
-        logger.info(f"Price refresh result: {json.dumps(refresh)}")
+        refresh = _refresh_price_data_once(run_state)
 
         rows = query_all(
             "SELECT ticker, price, ts FROM price_data ORDER BY ts DESC LIMIT 100;"
@@ -222,26 +342,94 @@ def tool_get_price_data() -> Dict:
             t = str(r["ticker"]).upper()
             if t not in seen:
                 seen[t] = {"ticker": t, "price": float(r["price"]), "ts": str(r["ts"])}
-        return {"prices": list(seen.values()), "count": len(seen)}
+        result = {"prices": list(seen.values()), "count": len(seen), "refresh": refresh}
+        if not result["prices"]:
+            _mark_degraded(run_state, "prices_missing", "no price rows available after refresh attempt")
+        if run_state is not None:
+            run_state["price_data"] = result
+        return result
     except Exception as e:
-        return {"error": str(e), "prices": []}
+        _mark_degraded(run_state, "price_data_error", str(e))
+        result = {"error": str(e), "prices": [], "refresh": run_state.get("price_refresh") if run_state else {}}
+        if run_state is not None:
+            run_state["price_data"] = result
+        return result
 
 
-def tool_get_macro_metrics() -> Dict:
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _macro_freshness(metrics: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    by_name = {str(m.get("metric_name", "")).upper(): m for m in metrics}
+    missing = [name for name in REQUIRED_MACRO_METRICS if name not in by_name]
+    stale = []
+    for name, max_age_days in MACRO_FRESHNESS_DAYS.items():
+        metric = by_name.get(name)
+        if not metric:
+            continue
+        observed_at = _parse_dt(metric.get("observed_at"))
+        if observed_at is None:
+            stale.append({"metric": name, "reason": "missing observed_at", "max_age_days": max_age_days})
+            continue
+        age_days = (now - observed_at.astimezone(timezone.utc)).total_seconds() / 86400
+        if age_days > max_age_days:
+            stale.append(
+                {
+                    "metric": name,
+                    "observed_at": observed_at.isoformat(),
+                    "age_days": round(age_days, 1),
+                    "max_age_days": max_age_days,
+                }
+            )
+    status = "ok" if not missing and not stale else "stale"
+    return {"status": status, "missing_metrics": missing, "stale_metrics": stale}
+
+
+def tool_get_macro_metrics(run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    if run_state is not None and "macro_metrics" in run_state:
+        return run_state["macro_metrics"]
     try:
         from intelligence.db import query_all
         rows = query_all(
             """
             SELECT DISTINCT ON (metric_name)
-                metric_name, observed_at, value, previous_value, pct_change
+                metric_name, observed_at, value, previous_value, pct_change, created_at
             FROM macro_signals
             ORDER BY metric_name, observed_at DESC
             LIMIT 30;
             """
         )
-        return {"metrics": [dict(r) for r in rows], "count": len(rows)}
+        metrics = [dict(r) for r in rows]
+        freshness = _macro_freshness(metrics)
+        result = {"metrics": metrics, "count": len(metrics), "freshness": freshness}
+        if freshness.get("status") != "ok":
+            parts = []
+            if freshness.get("missing_metrics"):
+                parts.append("missing=" + ",".join(freshness["missing_metrics"]))
+            if freshness.get("stale_metrics"):
+                stale_names = [str(item.get("metric")) for item in freshness["stale_metrics"]]
+                parts.append("stale=" + ",".join(stale_names))
+            _mark_degraded(run_state, "macro_freshness_failed", "; ".join(parts) or "macro freshness check failed")
+        if run_state is not None:
+            run_state["macro_metrics"] = result
+        return result
     except Exception as e:
-        return {"error": str(e), "metrics": []}
+        _mark_degraded(run_state, "macro_metrics_error", str(e))
+        result = {"error": str(e), "metrics": [], "freshness": {"status": "stale", "missing_metrics": list(REQUIRED_MACRO_METRICS), "stale_metrics": []}}
+        if run_state is not None:
+            run_state["macro_metrics"] = result
+        return result
 
 
 def tool_send_telegram_briefing(message: str) -> Dict:
@@ -292,6 +480,35 @@ def _signal_ts(signal: Dict[str, Any]) -> float:
     return 0.0
 
 
+def _iso_from_timestamp(value: float) -> str:
+    if not value:
+        return ""
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+
+
+def _signal_freshness(signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not signals:
+        return {"status": "missing", "latest_signal_time": "", "count": 0}
+    latest_ts = max(_signal_ts(signal) for signal in signals)
+    age_hours = (datetime.now(timezone.utc).timestamp() - latest_ts) / 3600 if latest_ts else None
+    status = "ok" if age_hours is not None and age_hours <= SIGNAL_FRESHNESS_HOURS else "stale"
+    return {
+        "status": status,
+        "latest_signal_time": _iso_from_timestamp(latest_ts),
+        "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        "count": len(signals),
+    }
+
+
+def _latest_price_timestamp(prices: List[Dict[str, Any]]) -> str:
+    latest_ts = 0.0
+    for price in prices:
+        parsed = _parse_dt(price.get("ts"))
+        if parsed is not None:
+            latest_ts = max(latest_ts, parsed.timestamp())
+    return _iso_from_timestamp(latest_ts)
+
+
 def _signal_totals(signals: List[Dict[str, Any]]) -> tuple[float, float]:
     buy_conf = sum(
         float(s.get("confidence") or 0)
@@ -317,19 +534,25 @@ def _bias_from_totals(buy_conf: float, sell_conf: float) -> str:
     return "NEUTRAL"
 
 
-def tool_assess_market_bias() -> Dict:
-    signals = tool_get_latest_signals(limit=20)
+def tool_assess_market_bias(run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    if run_state is not None and "market_bias" in run_state:
+        return run_state["market_bias"]
+    signals = tool_get_latest_signals(limit=SIGNAL_SNAPSHOT_LIMIT, run_state=run_state)
     unique_signals = _dedupe_signals(signals.get("signals", []) or [])
-    prices = tool_get_price_data()
+    prices = tool_get_price_data(run_state=run_state)
     buy_conf, sell_conf = _signal_totals(unique_signals)
     bias = _bias_from_totals(buy_conf, sell_conf)
-    return {
+    result = {
         "bias": bias,
         "buy_confidence_total": buy_conf,
         "sell_confidence_total": sell_conf,
         "signal_count": len(unique_signals),
         "price_count": prices.get("count", 0),
     }
+    if run_state is not None:
+        run_state["market_bias"] = result
+    return result
 
 
 def _fmt_number(value: Any, decimals: int = 1) -> str:
@@ -387,15 +610,52 @@ def _conservative_read(bias: str, buy_total: float, sell_total: float, signal_co
     return "Signal totals are mixed or low-conviction; wait for confirmation before acting."
 
 
+def _macro_freshness_line(freshness: Dict[str, Any]) -> str:
+    if freshness.get("status") == "ok":
+        return ""
+    details = []
+    missing = freshness.get("missing_metrics") or []
+    stale = freshness.get("stale_metrics") or []
+    if missing:
+        details.append("missing " + ", ".join(str(item) for item in missing[:5]))
+    if stale:
+        stale_bits = []
+        for item in stale[:5]:
+            metric = str(item.get("metric", "unknown"))
+            age = item.get("age_days")
+            if age is None:
+                stale_bits.append(metric)
+            else:
+                stale_bits.append(f"{metric} age {age}d")
+        details.append("stale " + ", ".join(stale_bits))
+    return "; ".join(details) or "freshness check failed"
+
+
+def _signal_freshness_line(freshness: Dict[str, Any]) -> str:
+    status = str(freshness.get("status") or "unknown").upper()
+    latest = freshness.get("latest_signal_time") or "unavailable"
+    age = freshness.get("age_hours")
+    if age is None:
+        return f"{status} - latest {latest}"
+    return f"{status} - latest {latest}, age {age}h"
+
+
 def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") -> str:
     signals_result = tool_state.get("get_latest_signals", {}) or {}
     bias_result = tool_state.get("assess_market_bias", {}) or {}
     prices_result = tool_state.get("get_price_data", {}) or {}
     macro_result = tool_state.get("get_macro_metrics", {}) or {}
+    run_info = tool_state.get("_run", {}) or {}
 
     signals = _dedupe_signals(signals_result.get("signals", []) or [])
     metrics = macro_result.get("metrics", []) or []
     prices = prices_result.get("prices", []) or []
+    signal_freshness = signals_result.get("freshness") or _signal_freshness(signals)
+    macro_freshness = macro_result.get("freshness", {}) or {}
+    macro_freshness_note = _macro_freshness_line(macro_freshness)
+    price_timestamp = _latest_price_timestamp(prices) or "unavailable"
+    run_timestamp = run_info.get("started_at") or datetime.now(timezone.utc).isoformat()
+    run_health = "DEGRADED" if run_info.get("degraded_mode") else "HEALTHY"
 
     buy_total, sell_total = _signal_totals(signals)
     bias = str(bias_result.get("bias") or _bias_from_totals(buy_total, sell_total)).upper()
@@ -413,7 +673,14 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
 
     lines = []
     lines.append("<b>GeoClaw Briefing</b>")
-    lines.append(f"<i>{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</i>")
+    lines.append(f"<b>Run Timestamp:</b> {html.escape(str(run_timestamp))}")
+    lines.append(f"<b>Price Timestamp:</b> {html.escape(str(price_timestamp))}")
+    if macro_freshness_note:
+        lines.append(f"<b>Macro Freshness:</b> DEGRADED - {html.escape(macro_freshness_note)}")
+    else:
+        lines.append("<b>Macro Freshness:</b> OK")
+    lines.append(f"<b>Signal Freshness:</b> {html.escape(_signal_freshness_line(signal_freshness))}")
+    lines.append(f"<b>Run Status:</b> {run_health}")
     lines.append("")
     lines.append(f"<b>Market Bias:</b> <i>{html.escape(bias)}</i>")
     lines.append(
@@ -428,7 +695,7 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
         lines.append(f"<b>Prices:</b> {' | '.join(price_bits)}")
 
     lines.append("")
-    lines.append("<b>Top Signals:</b>")
+    lines.append("<b>Directional Signals:</b>")
     if signals:
         for idx, s in enumerate(signals[:5], 1):
             direction = html.escape(str(s.get("direction", "HOLD")).upper())
@@ -445,6 +712,12 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
         f"<b>Conservative Read:</b> {_conservative_read(bias, buy_total, sell_total, len(signals))}"
     )
 
+    if run_info.get("degraded_mode"):
+        lines.append("")
+        lines.append("<b>Degraded Notes:</b>")
+        for note in (run_info.get("degradation_notes") or [])[:5]:
+            lines.append(f"- {html.escape(str(note))}")
+
     if error_note:
         lines.append("")
         lines.append(f"<b>Agent Note:</b> {html.escape(error_note)}")
@@ -452,12 +725,87 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
     return "\n".join(lines)
 
 
+def _read_operator_status() -> Dict[str, Any]:
+    try:
+        if STATUS_FILE.exists():
+            raw = STATUS_FILE.read_text(encoding="utf-8").strip()
+            if raw:
+                return json.loads(raw)
+    except Exception as exc:
+        logger.warning("Could not read operator status file: %s", exc)
+    return {}
+
+
+def _build_operator_status(
+    tool_state: Dict[str, Any],
+    run_state: Dict[str, Any],
+    telegram_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    previous = _read_operator_status()
+    run_completed_at = datetime.now(timezone.utc).isoformat()
+    prices_result = tool_state.get("get_price_data", {}) or {}
+    macro_result = tool_state.get("get_macro_metrics", {}) or {}
+    signals_result = tool_state.get("get_latest_signals", {}) or {}
+    price_timestamp = _latest_price_timestamp(prices_result.get("prices", []) or [])
+    telegram_ok = telegram_result.get("status") == "ok"
+    last_telegram_send_time = (
+        run_state.get("last_telegram_send_time")
+        if telegram_ok
+        else previous.get("last_telegram_send_time", "")
+    )
+    return {
+        "updated_at": run_completed_at,
+        "run_id": run_state.get("run_id", ""),
+        "run_started_at": run_state.get("started_at", ""),
+        "last_successful_run_time": run_completed_at if telegram_ok else previous.get("last_successful_run_time", ""),
+        "last_telegram_send_time": last_telegram_send_time or "",
+        "last_price_refresh_time": run_state.get("last_price_refresh_time") or previous.get("last_price_refresh_time", ""),
+        "price_timestamp": price_timestamp or "unavailable",
+        "macro_freshness_status": macro_result.get("freshness", {}),
+        "signal_freshness_status": signals_result.get("freshness") or _signal_freshness(signals_result.get("signals", []) or []),
+        "current_run_health": "DEGRADED" if run_state.get("degraded_mode") else "HEALTHY",
+        "last_degradation_reasons": list(run_state.get("degradation_notes", [])),
+        "groq_result": dict(run_state.get("groq_result", {})),
+        "telegram_result": dict(telegram_result or {}),
+        "signal_count": signals_result.get("count", 0),
+        "price_count": prices_result.get("count", 0),
+    }
+
+
+def _write_operator_status(
+    tool_state: Dict[str, Any],
+    run_state: Dict[str, Any],
+    telegram_result: Dict[str, Any],
+) -> None:
+    try:
+        STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        status = _build_operator_status(tool_state, run_state, telegram_result)
+        STATUS_FILE.write_text(json.dumps(status, indent=2, default=_json_serial) + "\n", encoding="utf-8")
+        logger.info("Operator status updated: %s", STATUS_FILE)
+    except Exception as exc:
+        logger.warning("Could not write operator status file: %s", exc)
+
+
+def _send_telegram_and_record(
+    briefing: str,
+    run_state: Dict[str, Any],
+    log_label: str,
+) -> Dict[str, Any]:
+    send_result = tool_send_telegram_briefing(briefing)
+    if send_result.get("status") == "ok":
+        run_state["last_telegram_send_time"] = datetime.now(timezone.utc).isoformat()
+    else:
+        _mark_degraded(run_state, "telegram_send_failed", str(send_result.get("message") or send_result))
+    logger.info("%s Telegram send result: %s", log_label, json.dumps(send_result))
+    return send_result
+
+
 TOOL_MAP = {
-    "get_latest_signals": lambda args: tool_get_latest_signals(**args),
-    "run_signal_engine": lambda args: tool_run_signal_engine(),
-    "get_price_data": lambda args: tool_get_price_data(),
-    "get_macro_metrics": lambda args: tool_get_macro_metrics(),
-    "assess_market_bias": lambda args: tool_assess_market_bias(),
+    "get_latest_signals": lambda args: tool_get_latest_signals(run_state=_CURRENT_RUN_STATE, **args),
+    "run_signal_engine": lambda args: tool_run_signal_engine(run_state=_CURRENT_RUN_STATE),
+    "get_price_data": lambda args: tool_get_price_data(run_state=_CURRENT_RUN_STATE),
+    "get_macro_metrics": lambda args: tool_get_macro_metrics(run_state=_CURRENT_RUN_STATE),
+    "assess_market_bias": lambda args: tool_assess_market_bias(run_state=_CURRENT_RUN_STATE),
 }
 
 
@@ -479,6 +827,7 @@ def call_groq(messages: List[Dict], tools: Optional[List] = None) -> Dict:
         payload["tool_choice"] = "auto"
 
     last_error = None
+    retry_count = 0
     for attempt in range(3):
         resp = requests.post(
             GROQ_URL,
@@ -490,6 +839,13 @@ def call_groq(messages: List[Dict], tools: Optional[List] = None) -> Dict:
             timeout=30,
         )
         if resp.status_code == 429:
+            retry_count += 1
+            if _CURRENT_RUN_STATE is not None:
+                _CURRENT_RUN_STATE["groq_result"] = {
+                    "status": "retrying" if attempt < 2 else "exhausted",
+                    "retry_count": retry_count,
+                    "last_status_code": 429,
+                }
             last_error = requests.HTTPError(
                 f"429 Client Error: Too Many Requests for url: {GROQ_URL}"
             )
@@ -525,7 +881,7 @@ Your job:
 Rules:
 - Always run the signal engine first, then fetch signals
 - Be concise and direct — traders need fast, clear information
-- Include market bias, top 3-5 actionable signals, and one key macro insight
+- Include market bias, top 3-5 directional signals, and one key macro insight
 - Format with Telegram HTML only: <b>bold</b>, <i>italic</i>, newlines with \n not <br>
 - Do not make up data — only use what tools return
 - Do not send Telegram directly; the runner sends a grounded briefing from current-run tool outputs
@@ -534,8 +890,44 @@ Rules:
 Today is {date}. Execute the full agentic loop now."""
 
 
+def _prepare_grounded_snapshot(run_state: Dict[str, Any]) -> Dict[str, Any]:
+    tool_state: Dict[str, Any] = {}
+    tool_state["get_price_data"] = tool_get_price_data(run_state=run_state)
+    tool_state["get_macro_metrics"] = tool_get_macro_metrics(run_state=run_state)
+    tool_state["run_signal_engine"] = tool_run_signal_engine(run_state=run_state)
+    tool_state["get_latest_signals"] = tool_get_latest_signals(
+        limit=SIGNAL_SNAPSHOT_LIMIT,
+        run_state=run_state,
+    )
+    tool_state["assess_market_bias"] = tool_assess_market_bias(run_state=run_state)
+    return _attach_run_status(tool_state, run_state)
+
+
+def _complete_grounded_tool_state(
+    tool_state: Dict[str, Any],
+    run_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    if "get_price_data" not in tool_state:
+        tool_state["get_price_data"] = tool_get_price_data(run_state=run_state)
+    if "get_macro_metrics" not in tool_state:
+        tool_state["get_macro_metrics"] = tool_get_macro_metrics(run_state=run_state)
+    if "run_signal_engine" not in tool_state:
+        tool_state["run_signal_engine"] = tool_run_signal_engine(run_state=run_state)
+    if "get_latest_signals" not in tool_state:
+        tool_state["get_latest_signals"] = tool_get_latest_signals(
+            limit=SIGNAL_SNAPSHOT_LIMIT,
+            run_state=run_state,
+        )
+    if "assess_market_bias" not in tool_state:
+        tool_state["assess_market_bias"] = tool_assess_market_bias(run_state=run_state)
+    return _attach_run_status(tool_state, run_state)
+
+
 def run_agent_loop() -> None:
-    logger.info("GeoClaw Agent Brain starting agentic loop")
+    global _CURRENT_RUN_STATE
+    run_state = _new_run_state()
+    _CURRENT_RUN_STATE = run_state
+    logger.info("GeoClaw Agent Brain starting agentic loop run_id=%s", run_state["run_id"])
     date_str = datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(date=date_str)},
@@ -544,97 +936,122 @@ def run_agent_loop() -> None:
 
     max_iterations = 10
     iteration = 0
-    tool_state: Dict[str, Any] = {}
+    tool_state: Dict[str, Any] = _prepare_grounded_snapshot(run_state)
     sent_briefing = False
+    last_send_result: Dict[str, Any] = {}
 
-    while iteration < max_iterations:
-        iteration += 1
-        logger.info(f"Agent iteration {iteration}")
+    try:
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"Agent iteration {iteration}")
 
-        try:
-            response = call_groq(messages, tools=TOOLS)
-        except Exception as e:
-            logger.error(f"Groq API error: {e}")
+            try:
+                response = call_groq(messages, tools=TOOLS)
+                run_state["groq_result"] = {**dict(run_state.get("groq_result", {})), "status": "ok"}
+            except Exception as e:
+                error_text = str(e)
+                code = "groq_retry_exhausted" if "429" in error_text else "groq_error"
+                retry_count = dict(run_state.get("groq_result", {})).get("retry_count", 0)
+                run_state["groq_result"] = {"status": code, "retry_count": retry_count, "message": error_text}
+                _mark_degraded(run_state, code, error_text)
+                logger.error(f"Groq API error: {e}")
+                if tool_state and not sent_briefing:
+                    tool_state = _complete_grounded_tool_state(tool_state, run_state)
+                    briefing = build_grounded_briefing(
+                        tool_state,
+                        error_note="Groq was rate-limited or unavailable. This briefing uses grounded tool outputs only.",
+                    )
+                    send_result = _send_telegram_and_record(briefing, run_state, "Fallback")
+                    last_send_result = send_result
+                    sent_briefing = bool(send_result.get("status") == "ok")
+                break
+
+            choice = response["choices"][0]
+            message = choice["message"]
+            finish_reason = choice.get("finish_reason", "")
+
+            messages.append(message)
+
+            if finish_reason == "stop":
+                content = (message.get("content") or "").strip()
+                if content:
+                    logger.info("Agent completed. Using grounded current-run tool summary for Telegram.")
+                if tool_state and not sent_briefing:
+                    tool_state = _complete_grounded_tool_state(tool_state, run_state)
+                    briefing = build_grounded_briefing(tool_state)
+                    send_result = _send_telegram_and_record(briefing, run_state, "Final")
+                    last_send_result = send_result
+                    sent_briefing = bool(send_result.get("status") == "ok")
+                break
+
+            if finish_reason == "tool_calls" or message.get("tool_calls"):
+                tool_calls = message.get("tool_calls", [])
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
+                    try:
+                        fn_args = json.loads(tc["function"].get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        fn_args = {}
+
+                    logger.info(f"Tool call: {fn_name}({fn_args})")
+
+                    if fn_name in TOOL_MAP:
+                        result = TOOL_MAP[fn_name](fn_args)
+                        tool_state[fn_name] = result
+                    else:
+                        result = {"error": f"Unknown tool: {fn_name}"}
+
+                    def _json_serial(obj):
+                        if isinstance(obj, datetime):
+                            return obj.isoformat()
+                        raise TypeError(f"Type {type(obj)} not serializable")
+
+                    result_str = json.dumps(result, default=_json_serial)
+                    logger.info(f"Tool result: {result_str[:200]}")
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result_str,
+                    })
+                continue
+
+            logger.warning(f"Unexpected finish_reason: {finish_reason}")
             if tool_state and not sent_briefing:
+                _mark_degraded(run_state, "unexpected_finish_reason", finish_reason or "unknown")
+                tool_state = _complete_grounded_tool_state(tool_state, run_state)
                 briefing = build_grounded_briefing(
                     tool_state,
-                    error_note="Groq was rate-limited or unavailable. This briefing uses grounded tool outputs only.",
+                    error_note=f"Unexpected agent finish state: {finish_reason or 'unknown'}",
                 )
-                send_result = tool_send_telegram_briefing(briefing)
-                logger.info(f"Fallback Telegram send result: {json.dumps(send_result)}")
+                send_result = _send_telegram_and_record(briefing, run_state, "Unexpected-finish")
+                last_send_result = send_result
                 sent_briefing = bool(send_result.get("status") == "ok")
             break
 
-        choice = response["choices"][0]
-        message = choice["message"]
-        finish_reason = choice.get("finish_reason", "")
-
-        messages.append(message)
-
-        if finish_reason == "stop":
-            content = (message.get("content") or "").strip()
-            if content:
-                logger.info("Agent completed. Using grounded current-run tool summary for Telegram.")
-            if tool_state and not sent_briefing:
-                briefing = build_grounded_briefing(tool_state)
-                send_result = tool_send_telegram_briefing(briefing)
-                logger.info(f"Final Telegram send result: {json.dumps(send_result)}")
-                sent_briefing = bool(send_result.get("status") == "ok")
-            break
-
-        if finish_reason == "tool_calls" or message.get("tool_calls"):
-            tool_calls = message.get("tool_calls", [])
-            for tc in tool_calls:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"].get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    fn_args = {}
-
-                logger.info(f"Tool call: {fn_name}({fn_args})")
-
-                if fn_name in TOOL_MAP:
-                    result = TOOL_MAP[fn_name](fn_args)
-                    tool_state[fn_name] = result
-                else:
-                    result = {"error": f"Unknown tool: {fn_name}"}
-
-                def _json_serial(obj):
-                    if isinstance(obj, datetime):
-                        return obj.isoformat()
-                    raise TypeError(f"Type {type(obj)} not serializable")
-
-                result_str = json.dumps(result, default=_json_serial)
-                logger.info(f"Tool result: {result_str[:200]}")
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result_str,
-                })
-            continue
-
-        logger.warning(f"Unexpected finish_reason: {finish_reason}")
         if tool_state and not sent_briefing:
+            _mark_degraded(run_state, "agent_loop_incomplete", "loop ended before an explicit final response")
+            tool_state = _complete_grounded_tool_state(tool_state, run_state)
             briefing = build_grounded_briefing(
                 tool_state,
-                error_note=f"Unexpected agent finish state: {finish_reason or 'unknown'}",
+                error_note="Agent loop ended before an explicit final response. Sending grounded tool summary.",
             )
-            send_result = tool_send_telegram_briefing(briefing)
-            logger.info(f"Unexpected-finish Telegram send result: {json.dumps(send_result)}")
+            send_result = _send_telegram_and_record(briefing, run_state, "End-of-loop")
+            last_send_result = send_result
             sent_briefing = bool(send_result.get("status") == "ok")
-        break
 
-    if tool_state and not sent_briefing:
-        briefing = build_grounded_briefing(
-            tool_state,
-            error_note="Agent loop ended before an explicit final response. Sending grounded tool summary.",
-        )
-        send_result = tool_send_telegram_briefing(briefing)
-        logger.info(f"End-of-loop Telegram send result: {json.dumps(send_result)}")
-        sent_briefing = bool(send_result.get("status") == "ok")
-
-    logger.info(f"Agent loop completed in {iteration} iterations")
+        if run_state.get("degraded_mode"):
+            logger.warning(
+                "Agent loop completed degraded run_id=%s iterations=%s notes=%s",
+                run_state.get("run_id"),
+                iteration,
+                "; ".join(run_state.get("degradation_notes", [])),
+            )
+        else:
+            logger.info("Agent loop completed run_id=%s iterations=%s", run_state.get("run_id"), iteration)
+    finally:
+        _write_operator_status(_attach_run_status(tool_state, run_state), run_state, last_send_result)
+        _CURRENT_RUN_STATE = None
 
 
 # ─────────────────────────────────────────────
