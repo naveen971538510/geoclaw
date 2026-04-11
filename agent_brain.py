@@ -50,6 +50,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 STATUS_FILE = ROOT / "logs" / "agent_brain.status.json"
+STATUS_HTML_FILE = ROOT / "logs" / "agent_brain.status.html"
+RUN_HISTORY_LIMIT = 12
+DEGRADED_ALERT_THRESHOLD = 3
+DEGRADED_ALERT_REPEAT_EVERY = 6
 SIGNAL_SNAPSHOT_LIMIT = 20
 SIGNAL_FRESHNESS_HOURS = 48
 MACRO_FRESHNESS_DAYS = {
@@ -371,28 +375,54 @@ def _parse_dt(value: Any) -> Optional[datetime]:
 def _macro_freshness(metrics: List[Dict[str, Any]]) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     by_name = {str(m.get("metric_name", "")).upper(): m for m in metrics}
+    if not by_name:
+        return {
+            "status": "unavailable",
+            "reason": "no macro rows available",
+            "missing_metrics": list(REQUIRED_MACRO_METRICS),
+            "stale_metrics": [],
+            "degraded_metrics": [],
+            "available_metrics": [],
+        }
     missing = [name for name in REQUIRED_MACRO_METRICS if name not in by_name]
     stale = []
+    degraded_metrics = []
     for name, max_age_days in MACRO_FRESHNESS_DAYS.items():
         metric = by_name.get(name)
         if not metric:
             continue
         observed_at = _parse_dt(metric.get("observed_at"))
         if observed_at is None:
-            stale.append({"metric": name, "reason": "missing observed_at", "max_age_days": max_age_days})
+            item = {"metric": name, "reason": "missing observed_at", "max_age_days": max_age_days}
+            stale.append(item)
+            degraded_metrics.append(item)
             continue
         age_days = (now - observed_at.astimezone(timezone.utc)).total_seconds() / 86400
         if age_days > max_age_days:
-            stale.append(
-                {
-                    "metric": name,
-                    "observed_at": observed_at.isoformat(),
-                    "age_days": round(age_days, 1),
-                    "max_age_days": max_age_days,
-                }
-            )
-    status = "ok" if not missing and not stale else "stale"
-    return {"status": status, "missing_metrics": missing, "stale_metrics": stale}
+            item = {
+                "metric": name,
+                "observed_at": observed_at.isoformat(),
+                "age_days": round(age_days, 1),
+                "max_age_days": max_age_days,
+            }
+            stale.append(item)
+            if age_days > max_age_days * 2:
+                degraded_metrics.append(item)
+    if len(missing) == len(REQUIRED_MACRO_METRICS):
+        status = "unavailable"
+    elif missing or degraded_metrics:
+        status = "degraded"
+    elif stale:
+        status = "stale-but-usable"
+    else:
+        status = "fresh"
+    return {
+        "status": status,
+        "missing_metrics": missing,
+        "stale_metrics": stale,
+        "degraded_metrics": degraded_metrics,
+        "available_metrics": sorted(by_name.keys()),
+    }
 
 
 def tool_get_macro_metrics(run_state: Optional[Dict[str, Any]] = None) -> Dict:
@@ -413,20 +443,39 @@ def tool_get_macro_metrics(run_state: Optional[Dict[str, Any]] = None) -> Dict:
         metrics = [dict(r) for r in rows]
         freshness = _macro_freshness(metrics)
         result = {"metrics": metrics, "count": len(metrics), "freshness": freshness}
-        if freshness.get("status") != "ok":
+        if freshness.get("status") in {"degraded", "unavailable"}:
             parts = []
             if freshness.get("missing_metrics"):
                 parts.append("missing=" + ",".join(freshness["missing_metrics"]))
-            if freshness.get("stale_metrics"):
-                stale_names = [str(item.get("metric")) for item in freshness["stale_metrics"]]
-                parts.append("stale=" + ",".join(stale_names))
+            degraded = freshness.get("degraded_metrics") or freshness.get("stale_metrics") or []
+            if degraded:
+                degraded_names = [str(item.get("metric")) for item in degraded]
+                parts.append("degraded=" + ",".join(degraded_names))
             _mark_degraded(run_state, "macro_freshness_failed", "; ".join(parts) or "macro freshness check failed")
+        elif freshness.get("status") == "stale-but-usable":
+            stale_names = [str(item.get("metric")) for item in freshness.get("stale_metrics", [])]
+            logger.warning(
+                "macro_freshness_stale_but_usable run_id=%s stale=%s",
+                run_state.get("run_id") if run_state else "",
+                ",".join(stale_names),
+            )
         if run_state is not None:
             run_state["macro_metrics"] = result
         return result
     except Exception as e:
         _mark_degraded(run_state, "macro_metrics_error", str(e))
-        result = {"error": str(e), "metrics": [], "freshness": {"status": "stale", "missing_metrics": list(REQUIRED_MACRO_METRICS), "stale_metrics": []}}
+        result = {
+            "error": str(e),
+            "metrics": [],
+            "freshness": {
+                "status": "unavailable",
+                "reason": str(e),
+                "missing_metrics": list(REQUIRED_MACRO_METRICS),
+                "stale_metrics": [],
+                "degraded_metrics": [],
+                "available_metrics": [],
+            },
+        }
         if run_state is not None:
             run_state["macro_metrics"] = result
         return result
@@ -607,15 +656,18 @@ def _conservative_read(bias: str, buy_total: float, sell_total: float, signal_co
         return "Bias leans bullish on the deduplicated signal totals; treat it as context, not a standalone trade call."
     if bias == "BEARISH" and sell_total > buy_total:
         return "Bias leans bearish on the deduplicated signal totals; treat it as context, not a standalone trade call."
-    return "Signal totals are mixed or low-conviction; wait for confirmation before acting."
+    return "Signal totals are mixed or low-conviction; treat the evidence as partial context."
 
 
 def _macro_freshness_line(freshness: Dict[str, Any]) -> str:
-    if freshness.get("status") == "ok":
+    if freshness.get("status") in {"ok", "fresh"}:
         return ""
     details = []
     missing = freshness.get("missing_metrics") or []
     stale = freshness.get("stale_metrics") or []
+    reason = freshness.get("reason")
+    if reason:
+        details.append(str(reason))
     if missing:
         details.append("missing " + ", ".join(str(item) for item in missing[:5]))
     if stale:
@@ -629,6 +681,19 @@ def _macro_freshness_line(freshness: Dict[str, Any]) -> str:
                 stale_bits.append(f"{metric} age {age}d")
         details.append("stale " + ", ".join(stale_bits))
     return "; ".join(details) or "freshness check failed"
+
+
+def _macro_freshness_label(freshness: Dict[str, Any]) -> str:
+    status = str(freshness.get("status") or "unknown").lower()
+    if status in {"ok", "fresh"}:
+        return "FRESH"
+    if status == "stale-but-usable":
+        return "STALE-BUT-USABLE"
+    if status == "unavailable":
+        return "UNAVAILABLE"
+    if status in {"stale", "degraded"}:
+        return "DEGRADED"
+    return status.upper()
 
 
 def _signal_freshness_line(freshness: Dict[str, Any]) -> str:
@@ -652,6 +717,7 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
     prices = prices_result.get("prices", []) or []
     signal_freshness = signals_result.get("freshness") or _signal_freshness(signals)
     macro_freshness = macro_result.get("freshness", {}) or {}
+    macro_freshness_label = _macro_freshness_label(macro_freshness)
     macro_freshness_note = _macro_freshness_line(macro_freshness)
     price_timestamp = _latest_price_timestamp(prices) or "unavailable"
     run_timestamp = run_info.get("started_at") or datetime.now(timezone.utc).isoformat()
@@ -676,9 +742,9 @@ def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") ->
     lines.append(f"<b>Run Timestamp:</b> {html.escape(str(run_timestamp))}")
     lines.append(f"<b>Price Timestamp:</b> {html.escape(str(price_timestamp))}")
     if macro_freshness_note:
-        lines.append(f"<b>Macro Freshness:</b> DEGRADED - {html.escape(macro_freshness_note)}")
+        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label} - {html.escape(macro_freshness_note)}")
     else:
-        lines.append("<b>Macro Freshness:</b> OK")
+        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label}")
     lines.append(f"<b>Signal Freshness:</b> {html.escape(_signal_freshness_line(signal_freshness))}")
     lines.append(f"<b>Run Status:</b> {run_health}")
     lines.append("")
@@ -736,6 +802,25 @@ def _read_operator_status() -> Dict[str, Any]:
     return {}
 
 
+def _degradation_codes(run_state: Dict[str, Any]) -> List[str]:
+    codes = [str(code) for code in (run_state.get("degradation_codes") or [])]
+    if codes:
+        return sorted(set(codes))
+    derived = []
+    for note in run_state.get("degradation_notes", []) or []:
+        code = str(note).split(":", 1)[0].strip()
+        if code:
+            derived.append(code)
+    return sorted(set(derived))
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
 def _build_operator_status(
     tool_state: Dict[str, Any],
     run_state: Dict[str, Any],
@@ -747,29 +832,205 @@ def _build_operator_status(
     macro_result = tool_state.get("get_macro_metrics", {}) or {}
     signals_result = tool_state.get("get_latest_signals", {}) or {}
     price_timestamp = _latest_price_timestamp(prices_result.get("prices", []) or [])
+    current_health = "DEGRADED" if run_state.get("degraded_mode") else "HEALTHY"
+    degradation_codes = _degradation_codes(run_state)
     telegram_ok = telegram_result.get("status") == "ok"
     last_telegram_send_time = (
         run_state.get("last_telegram_send_time")
         if telegram_ok
         else previous.get("last_telegram_send_time", "")
     )
+    signal_freshness = signals_result.get("freshness") or _signal_freshness(signals_result.get("signals", []) or [])
+    macro_freshness = macro_result.get("freshness", {})
+    price_refresh = prices_result.get("refresh", {}) or {}
+
+    previous_history = previous.get("recent_runs", [])
+    if not isinstance(previous_history, list):
+        previous_history = []
+    run_entry = {
+        "run_id": run_state.get("run_id", ""),
+        "completed_at": run_completed_at,
+        "health": current_health,
+        "degradation_codes": degradation_codes,
+        "price_timestamp": price_timestamp or "unavailable",
+        "price_refresh_status": price_refresh.get("status", "unknown"),
+        "macro_freshness": macro_freshness.get("status", "unknown"),
+        "signal_freshness": signal_freshness.get("status", "unknown"),
+        "groq_status": dict(run_state.get("groq_result", {})).get("status", "unknown"),
+        "telegram_status": telegram_result.get("status", "unknown"),
+    }
+    recent_runs = (previous_history + [run_entry])[-RUN_HISTORY_LIMIT:]
+    recent_healthy_count = sum(1 for item in recent_runs if item.get("health") == "HEALTHY")
+    recent_degraded_count = sum(1 for item in recent_runs if item.get("health") == "DEGRADED")
+
+    previous_streak = _safe_int(previous.get("degraded_streak"))
+    degraded_streak = previous_streak + 1 if current_health == "DEGRADED" else 0
+    previous_alert = previous.get("degraded_alert") or {}
+    last_alert_streak = _safe_int(previous_alert.get("last_alert_streak"))
+    last_alert_time = str(previous_alert.get("last_alert_time") or "")
+    if current_health == "HEALTHY":
+        last_alert_streak = 0
+    should_alert = (
+        current_health == "DEGRADED"
+        and degraded_streak >= DEGRADED_ALERT_THRESHOLD
+        and (
+            last_alert_streak < DEGRADED_ALERT_THRESHOLD
+            or degraded_streak - last_alert_streak >= DEGRADED_ALERT_REPEAT_EVERY
+        )
+    )
+
     return {
         "updated_at": run_completed_at,
         "run_id": run_state.get("run_id", ""),
         "run_started_at": run_state.get("started_at", ""),
         "last_successful_run_time": run_completed_at if telegram_ok else previous.get("last_successful_run_time", ""),
+        "last_healthy_run_time": (
+            run_completed_at
+            if current_health == "HEALTHY" and telegram_ok
+            else previous.get("last_healthy_run_time", "")
+        ),
         "last_telegram_send_time": last_telegram_send_time or "",
         "last_price_refresh_time": run_state.get("last_price_refresh_time") or previous.get("last_price_refresh_time", ""),
         "price_timestamp": price_timestamp or "unavailable",
-        "macro_freshness_status": macro_result.get("freshness", {}),
-        "signal_freshness_status": signals_result.get("freshness") or _signal_freshness(signals_result.get("signals", []) or []),
-        "current_run_health": "DEGRADED" if run_state.get("degraded_mode") else "HEALTHY",
+        "price_refresh_status": price_refresh,
+        "macro_freshness_status": macro_freshness,
+        "signal_freshness_status": signal_freshness,
+        "current_run_health": current_health,
+        "degraded_streak": degraded_streak,
         "last_degradation_reasons": list(run_state.get("degradation_notes", [])),
+        "last_degradation_codes": degradation_codes,
         "groq_result": dict(run_state.get("groq_result", {})),
         "telegram_result": dict(telegram_result or {}),
         "signal_count": signals_result.get("count", 0),
         "price_count": prices_result.get("count", 0),
+        "recent_runs": recent_runs,
+        "recent_health_summary": {
+            "limit": RUN_HISTORY_LIMIT,
+            "healthy": recent_healthy_count,
+            "degraded": recent_degraded_count,
+            "last_degradation_codes": degradation_codes,
+        },
+        "degraded_alert": {
+            "threshold": DEGRADED_ALERT_THRESHOLD,
+            "repeat_every": DEGRADED_ALERT_REPEAT_EVERY,
+            "streak": degraded_streak,
+            "should_alert": should_alert,
+            "status": "pending" if should_alert else ("clear" if current_health == "HEALTHY" else "watching"),
+            "last_alert_streak": last_alert_streak,
+            "last_alert_time": last_alert_time,
+            "last_alert_result": previous_alert.get("last_alert_result", {}),
+        },
     }
+
+
+def _operator_alert_message(status: Dict[str, Any]) -> str:
+    codes = status.get("last_degradation_codes") or ["unknown"]
+    groq_status = (status.get("groq_result") or {}).get("status", "unknown")
+    return "\n".join(
+        [
+            "<b>GeoClaw Operator Alert</b>",
+            f"Run Status: DEGRADED for {int(status.get('degraded_streak') or 0)} consecutive runs.",
+            f"Latest codes: {html.escape(', '.join(str(code) for code in codes[:8]))}",
+            f"Groq: {html.escape(str(groq_status))}",
+            "Briefings remain grounded in current-run tool outputs; operator review is recommended.",
+        ]
+    )
+
+
+def _send_degraded_alert_if_needed(status: Dict[str, Any]) -> Dict[str, Any]:
+    alert = status.get("degraded_alert") or {}
+    if not alert.get("should_alert"):
+        return status
+    attempted_at = datetime.now(timezone.utc).isoformat()
+    try:
+        result = tool_send_telegram_briefing(_operator_alert_message(status))
+    except Exception as exc:
+        result = {"status": "error", "message": str(exc)}
+    alert["last_alert_streak"] = int(status.get("degraded_streak") or 0)
+    alert["last_alert_time"] = attempted_at
+    alert["last_alert_result"] = result
+    alert["should_alert"] = False
+    alert["status"] = "sent" if result.get("status") == "ok" else "failed"
+    status["degraded_alert"] = alert
+    if result.get("status") == "ok":
+        logger.warning(
+            "Degraded run alert sent streak=%s codes=%s",
+            status.get("degraded_streak"),
+            ",".join(status.get("last_degradation_codes") or []),
+        )
+    else:
+        logger.warning("Degraded run alert failed streak=%s result=%s", status.get("degraded_streak"), result)
+    return status
+
+
+def _compact_status_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=_json_serial, sort_keys=True)
+    return "" if value is None else str(value)
+
+
+def _write_operator_report(status: Dict[str, Any]) -> None:
+    rows = [
+        ("Last Successful Run", status.get("last_successful_run_time", "")),
+        ("Last Telegram Send", status.get("last_telegram_send_time", "")),
+        ("Current Health", status.get("current_run_health", "")),
+        ("Degraded Streak", status.get("degraded_streak", 0)),
+        ("Price Timestamp", status.get("price_timestamp", "")),
+        ("Price Refresh", status.get("price_refresh_status", {})),
+        ("Macro Freshness", status.get("macro_freshness_status", {})),
+        ("Signal Freshness", status.get("signal_freshness_status", {})),
+        ("Groq", status.get("groq_result", {})),
+        ("Last Degradation Codes", ", ".join(status.get("last_degradation_codes") or [])),
+    ]
+    row_html = "\n".join(
+        "<tr><th>{}</th><td>{}</td></tr>".format(
+            html.escape(label),
+            html.escape(_compact_status_value(value)),
+        )
+        for label, value in rows
+    )
+    recent_rows = "\n".join(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+            html.escape(str(item.get("completed_at", ""))),
+            html.escape(str(item.get("health", ""))),
+            html.escape(",".join(str(code) for code in item.get("degradation_codes", []) or [])),
+            html.escape(str(item.get("groq_status", ""))),
+        )
+        for item in status.get("recent_runs", [])[-RUN_HISTORY_LIMIT:]
+    )
+    summary = status.get("recent_health_summary", {}) or {}
+    html_doc = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoClaw Agent Brain Status</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #172026; background: #f8faf9; }}
+    h1, h2 {{ font-size: 20px; margin: 0 0 12px; }}
+    h2 {{ margin-top: 24px; }}
+    table {{ border-collapse: collapse; width: 100%; max-width: 1100px; background: #ffffff; }}
+    th, td {{ border: 1px solid #c9d3d0; padding: 8px; text-align: left; vertical-align: top; font-size: 14px; }}
+    th {{ width: 220px; background: #eef3f1; }}
+    .status {{ font-weight: 700; }}
+  </style>
+</head>
+<body>
+  <h1>GeoClaw Agent Brain Status</h1>
+  <p class="status">Current health: {html.escape(str(status.get("current_run_health", "")))}</p>
+  <p>Recent runs: {int(summary.get("healthy") or 0)} healthy, {int(summary.get("degraded") or 0)} degraded.</p>
+  <table>
+{row_html}
+  </table>
+  <h2>Recent Runs</h2>
+  <table>
+    <tr><th>Completed At</th><th>Health</th><th>Codes</th><th>Groq</th></tr>
+{recent_rows}
+  </table>
+</body>
+</html>
+"""
+    STATUS_HTML_FILE.write_text(html_doc, encoding="utf-8")
 
 
 def _write_operator_status(
@@ -780,7 +1041,9 @@ def _write_operator_status(
     try:
         STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
         status = _build_operator_status(tool_state, run_state, telegram_result)
+        status = _send_degraded_alert_if_needed(status)
         STATUS_FILE.write_text(json.dumps(status, indent=2, default=_json_serial) + "\n", encoding="utf-8")
+        _write_operator_report(status)
         logger.info("Operator status updated: %s", STATUS_FILE)
     except Exception as exc:
         logger.warning("Could not write operator status file: %s", exc)
