@@ -100,36 +100,30 @@ def _insert_signal(
     ts = datetime.now(timezone.utc)
     with get_connection() as conn:
         cur = conn.cursor()
-        # Deduplicate: if latest saved signal for this name has same direction/value/explanation, skip insert.
         cur.execute(
             """
-            SELECT direction, value, explanation_plain_english
-            FROM geoclaw_signals
-            WHERE signal_name = %s
-            ORDER BY ts DESC
-            LIMIT 1;
+            INSERT INTO geoclaw_signals (
+
+                signal_name,
+                value,
+                direction,
+                confidence,
+                explanation_plain_english,
+                ts,
+                signal_day
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s,
+                (%s::timestamptz AT TIME ZONE 'UTC')::date
+            )
+            ON CONFLICT (signal_name, direction, signal_day)
+            DO UPDATE SET
+                value = EXCLUDED.value,
+                confidence = EXCLUDED.confidence,
+                explanation_plain_english = EXCLUDED.explanation_plain_english,
+                ts = EXCLUDED.ts;
             """,
-            (name,),
-        )
-        row = cur.fetchone()
-        if row:
-            last_direction = str(row[0] or "").upper()
-            last_value = row[1]
-            last_expl = str(row[2] or "")
-            same_value = False
-            if value is None and last_value is None:
-                same_value = True
-            elif value is not None and last_value is not None:
-                same_value = abs(float(value) - float(last_value)) <= 1e-9
-            if last_direction == direction and same_value and last_expl == explanation[:2000]:
-                cur.close()
-                return
-        cur.execute(
-            """
-            INSERT INTO geoclaw_signals (signal_name, value, direction, confidence, explanation_plain_english, ts)
-            VALUES (%s, %s, %s, %s, %s, %s);
-            """,
-            (name, value, direction, confidence, explanation[:2000], ts),
+            (name, value, direction, confidence, explanation[:2000], ts, ts),
         )
         cur.close()
 
