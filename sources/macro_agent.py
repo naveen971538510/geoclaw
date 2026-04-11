@@ -246,7 +246,7 @@ def ingest_bls_nfp() -> None:
     )
 
 
-def run_ingestion_once() -> None:
+def refresh_macro_data_once() -> None:
     if not get_database_url():
         raise RuntimeError("DATABASE_URL is not set")
     ensure_intelligence_schema()
@@ -257,6 +257,10 @@ def run_ingestion_once() -> None:
     ingest_fred_series("TREASURY_2Y", SERIES["TREASURY_2Y"])
     ingest_gdp_growth()
     ingest_bls_nfp()
+
+
+def run_ingestion_once() -> None:
+    refresh_macro_data_once()
     # Run signal engine after fresh macro data
     from intelligence.signal_engine import run_signal_engine
 
