@@ -76,8 +76,39 @@ def ensure_intelligence_schema() -> None:
         )
         cur.execute(
             """
+            ALTER TABLE geoclaw_signals
+            ADD COLUMN IF NOT EXISTS signal_day DATE;
+            """
+        )
+        cur.execute(
+            """
+            UPDATE geoclaw_signals
+            SET signal_day = (ts AT TIME ZONE 'UTC')::date
+            WHERE signal_day IS NULL;
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM geoclaw_signals a
+            USING geoclaw_signals b
+            WHERE a.signal_name = b.signal_name
+              AND a.direction = b.direction
+              AND a.signal_day = b.signal_day
+              AND (
+                    a.ts < b.ts
+                    OR (a.ts = b.ts AND a.id < b.id)
+                  );
+            """
+        )
+        cur.execute(
+            """
+            DROP INDEX IF EXISTS idx_geoclaw_signals_name_dir_day;
+            """
+        )
+        cur.execute(
+            """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_geoclaw_signals_name_dir_day
-            ON geoclaw_signals (signal_name, direction, (DATE(ts)));
+            ON geoclaw_signals (signal_name, direction, signal_day);
             """
         )
         cur.execute(
