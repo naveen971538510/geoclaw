@@ -153,11 +153,69 @@ def tool_run_signal_engine() -> Dict:
         return {"status": "error", "message": str(e)}
 
 
+def _refresh_price_data_from_feed() -> Dict:
+    try:
+        from intelligence.db import ensure_intelligence_schema, get_connection
+        from services.price_feed import PriceFeed
+
+        ensure_intelligence_schema()
+
+        source_symbols = [
+            "^GSPC",      # -> SPX
+            "GC=F",       # -> XAUUSD
+            "BTC-USD",    # -> BTCUSD
+            "GLD",
+            "USO",
+            "GBPUSD=X",   # -> GBPUSD
+            "SPY",
+            "QQQ",
+        ]
+        symbol_map = {
+            "^GSPC": "SPX",
+            "GC=F": "XAUUSD",
+            "BTC-USD": "BTCUSD",
+            "GBPUSD=X": "GBPUSD",
+        }
+
+        feed = PriceFeed()
+        snapshot = feed.get_snapshot(source_symbols)
+        if not snapshot:
+            return {"status": "error", "message": "No fresh market snapshot returned", "inserted": 0}
+
+        inserted = 0
+        with get_connection() as conn:
+            cur = conn.cursor()
+            for source_symbol in source_symbols:
+                data = snapshot.get(source_symbol) or {}
+                price = data.get("price")
+                ts = data.get("timestamp")
+                if price is None:
+                    continue
+                ticker = symbol_map.get(source_symbol, source_symbol)
+                cur.execute(
+                    """
+                    INSERT INTO price_data (ticker, price, ts)
+                    VALUES (%s, %s, %s::timestamptz);
+                    """,
+                    (ticker, float(price), str(ts)),
+                )
+                inserted += 1
+            cur.close()
+
+        return {"status": "ok", "message": "price_data refreshed", "inserted": inserted}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "inserted": 0}
+
+
 def tool_get_price_data() -> Dict:
     try:
         from intelligence.db import query_all
+
+        refresh = _refresh_price_data_from_feed()
+        logger.info(f"Price refresh result: {json.dumps(refresh)}")
+
         rows = query_all(
-            "SELECT ticker, price, ts FROM price_data ORDER BY ts DESC LIMIT 50;"
+            "SELECT ticker, price, ts FROM price_data ORDER BY ts DESC LIMIT 100;"
         )
         seen = {}
         for r in rows:
