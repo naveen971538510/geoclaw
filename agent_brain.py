@@ -46,6 +46,8 @@ from config import (
 
 _load_local_env(ENV_FILE)
 
+from briefing_formatter import build_briefing
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "llama-3.1-8b-instant"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -604,193 +606,6 @@ def tool_assess_market_bias(run_state: Optional[Dict[str, Any]] = None) -> Dict:
     return result
 
 
-def _fmt_number(value: Any, decimals: int = 1) -> str:
-    try:
-        return f"{float(value):.{decimals}f}"
-    except Exception:
-        return str(value)
-
-
-def _pick_macro_insight(metrics: List[Dict[str, Any]]) -> str:
-    if not metrics:
-        return "No macro metrics available."
-
-    priority = [
-        "CPI_YOY_PCT",
-        "FEDFUNDS",
-        "UNRATE",
-        "GDP_QOQ",
-        "GDP_YOY",
-        "NFP",
-        "PAYROLLS",
-    ]
-    by_name = {str(m.get("metric_name", "")).upper(): m for m in metrics}
-    chosen = None
-    for key in priority:
-        if key in by_name:
-            chosen = by_name[key]
-            break
-    if chosen is None:
-        chosen = metrics[0]
-
-    name = str(chosen.get("metric_name", "Unknown metric"))
-    value = chosen.get("value")
-    previous = chosen.get("previous_value")
-    pct_change = chosen.get("pct_change")
-
-    parts = [f"{html.escape(name)} = {_fmt_number(value)}"]
-    if previous is not None:
-        parts.append(f"prev {_fmt_number(previous)}")
-    if pct_change is not None:
-        parts.append(f"change {_fmt_number(pct_change, 2)}%")
-    observed_at = chosen.get("observed_at")
-    if observed_at:
-        parts.append(f"as of {html.escape(str(observed_at))}")
-    return "; ".join(parts)
-
-
-def _conservative_read(bias: str, buy_total: float, sell_total: float, signal_count: int) -> str:
-    if signal_count == 0:
-        return "No fresh directional signal set is available from this run."
-    if bias == "BULLISH" and buy_total > sell_total:
-        return "Bias leans bullish on the deduplicated signal totals; treat it as context, not a standalone trade call."
-    if bias == "BEARISH" and sell_total > buy_total:
-        return "Bias leans bearish on the deduplicated signal totals; treat it as context, not a standalone trade call."
-    return "Signal totals are mixed or low-conviction; treat the evidence as partial context."
-
-
-def _macro_freshness_line(freshness: Dict[str, Any]) -> str:
-    if freshness.get("status") in {"ok", "fresh"}:
-        return ""
-    details = []
-    missing = freshness.get("missing_metrics") or []
-    stale = freshness.get("stale_metrics") or []
-    reason = freshness.get("reason")
-    if reason:
-        details.append(str(reason))
-    if missing:
-        details.append("missing " + ", ".join(str(item) for item in missing[:5]))
-    if stale:
-        stale_bits = []
-        for item in stale[:5]:
-            metric = str(item.get("metric", "unknown"))
-            age = item.get("age_days")
-            if age is None:
-                stale_bits.append(metric)
-            else:
-                stale_bits.append(f"{metric} age {age}d")
-        details.append("stale " + ", ".join(stale_bits))
-    return "; ".join(details) or "freshness check failed"
-
-
-def _macro_freshness_label(freshness: Dict[str, Any]) -> str:
-    status = str(freshness.get("status") or "unknown").lower()
-    if status in {"ok", "fresh"}:
-        return "FRESH"
-    if status == "stale-but-usable":
-        return "STALE-BUT-USABLE"
-    if status == "unavailable":
-        return "UNAVAILABLE"
-    if status in {"stale", "degraded"}:
-        return "DEGRADED"
-    return status.upper()
-
-
-def _signal_freshness_line(freshness: Dict[str, Any]) -> str:
-    status = str(freshness.get("status") or "unknown").upper()
-    latest = freshness.get("latest_signal_time") or "unavailable"
-    age = freshness.get("age_hours")
-    if age is None:
-        return f"{status} - latest {latest}"
-    return f"{status} - latest {latest}, age {age}h"
-
-
-def build_grounded_briefing(tool_state: Dict[str, Any], error_note: str = "") -> str:
-    signals_result = tool_state.get("get_latest_signals", {}) or {}
-    bias_result = tool_state.get("assess_market_bias", {}) or {}
-    prices_result = tool_state.get("get_price_data", {}) or {}
-    macro_result = tool_state.get("get_macro_metrics", {}) or {}
-    run_info = tool_state.get("_run", {}) or {}
-
-    signals = _dedupe_signals(signals_result.get("signals", []) or [])
-    metrics = macro_result.get("metrics", []) or []
-    prices = prices_result.get("prices", []) or []
-    signal_freshness = signals_result.get("freshness") or _signal_freshness(signals)
-    macro_freshness = macro_result.get("freshness", {}) or {}
-    macro_freshness_label = _macro_freshness_label(macro_freshness)
-    macro_freshness_note = _macro_freshness_line(macro_freshness)
-    price_timestamp = _latest_price_timestamp(prices) or "unavailable"
-    run_timestamp = run_info.get("started_at") or datetime.now(timezone.utc).isoformat()
-    run_health = "DEGRADED" if run_info.get("degraded_mode") else "HEALTHY"
-
-    buy_total, sell_total = _signal_totals(signals)
-    bias = str(bias_result.get("bias") or _bias_from_totals(buy_total, sell_total)).upper()
-
-    preferred = ["SPX", "XAUUSD", "BTCUSD", "GLD", "USO", "GBPUSD", "SPY", "QQQ"]
-    price_map = {}
-    for p in prices:
-        ticker = str(p.get("ticker", "")).upper()
-        if ticker and ticker not in price_map:
-            price_map[ticker] = p
-
-    ordered_prices = [price_map[t] for t in preferred if t in price_map]
-    if not ordered_prices:
-        ordered_prices = prices[:3]
-
-    lines = []
-    lines.append("<b>GeoClaw Briefing</b>")
-    lines.append(f"<b>Run Timestamp:</b> {html.escape(str(run_timestamp))}")
-    lines.append(f"<b>Price Timestamp:</b> {html.escape(str(price_timestamp))}")
-    if macro_freshness_note:
-        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label} - {html.escape(macro_freshness_note)}")
-    else:
-        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label}")
-    lines.append(f"<b>Signal Freshness:</b> {html.escape(_signal_freshness_line(signal_freshness))}")
-    lines.append(f"<b>Run Status:</b> {run_health}")
-    lines.append("")
-    lines.append(f"<b>Market Bias:</b> <i>{html.escape(bias)}</i>")
-    lines.append(
-        f"<b>Signal Totals:</b> BUY {_fmt_number(buy_total)} | SELL {_fmt_number(sell_total)}"
-    )
-
-    if ordered_prices:
-        price_bits = []
-        for p in ordered_prices[:4]:
-            ticker = html.escape(str(p.get("ticker", "")))
-            price_bits.append(f"{ticker} {_fmt_number(p.get('price'), 2)}")
-        lines.append(f"<b>Prices:</b> {' | '.join(price_bits)}")
-
-    lines.append("")
-    lines.append("<b>Directional Signals:</b>")
-    if signals:
-        for idx, s in enumerate(signals[:5], 1):
-            direction = html.escape(str(s.get("direction", "HOLD")).upper())
-            name = html.escape(str(s.get("signal_name", "Unknown signal")))
-            confidence = _fmt_number(s.get("confidence", 0), 0)
-            lines.append(f"{idx}. <b>{direction}</b> {name} ({confidence})")
-    else:
-        lines.append("No fresh BUY/SELL signals in the last 48 hours.")
-
-    lines.append("")
-    lines.append(f"<b>Macro Insight:</b> {_pick_macro_insight(metrics)}")
-    lines.append("")
-    lines.append(
-        f"<b>Conservative Read:</b> {_conservative_read(bias, buy_total, sell_total, len(signals))}"
-    )
-
-    if run_info.get("degraded_mode"):
-        lines.append("")
-        lines.append("<b>Degraded Notes:</b>")
-        for note in (run_info.get("degradation_notes") or [])[:5]:
-            lines.append(f"- {html.escape(str(note))}")
-
-    if error_note:
-        lines.append("")
-        lines.append(f"<b>Agent Note:</b> {html.escape(error_note)}")
-
-    return "\n".join(lines)
-
-
 def _read_operator_status() -> Dict[str, Any]:
     try:
         if STATUS_FILE.exists():
@@ -1220,10 +1035,8 @@ def run_agent_loop() -> None:
                 logger.error(f"Groq API error: {e}")
                 if tool_state and not sent_briefing:
                     tool_state = _complete_grounded_tool_state(tool_state, run_state)
-                    briefing = build_grounded_briefing(
-                        tool_state,
-                        error_note="Groq was rate-limited or unavailable. This briefing uses grounded tool outputs only.",
-                    )
+                    run_state["briefing_note"] = "Groq was rate-limited or unavailable. This briefing uses grounded tool outputs only."
+                    briefing = build_briefing(run_state)
                     send_result = _send_telegram_and_record(briefing, run_state, "Fallback")
                     last_send_result = send_result
                     sent_briefing = bool(send_result.get("status") == "ok")
@@ -1241,7 +1054,7 @@ def run_agent_loop() -> None:
                     logger.info("Agent completed. Using grounded current-run tool summary for Telegram.")
                 if tool_state and not sent_briefing:
                     tool_state = _complete_grounded_tool_state(tool_state, run_state)
-                    briefing = build_grounded_briefing(tool_state)
+                    briefing = build_briefing(run_state)
                     send_result = _send_telegram_and_record(briefing, run_state, "Final")
                     last_send_result = send_result
                     sent_briefing = bool(send_result.get("status") == "ok")
@@ -1283,10 +1096,8 @@ def run_agent_loop() -> None:
             if tool_state and not sent_briefing:
                 _mark_degraded(run_state, "unexpected_finish_reason", finish_reason or "unknown")
                 tool_state = _complete_grounded_tool_state(tool_state, run_state)
-                briefing = build_grounded_briefing(
-                    tool_state,
-                    error_note=f"Unexpected agent finish state: {finish_reason or 'unknown'}",
-                )
+                run_state["briefing_note"] = f"Unexpected agent finish state: {finish_reason or 'unknown'}"
+                briefing = build_briefing(run_state)
                 send_result = _send_telegram_and_record(briefing, run_state, "Unexpected-finish")
                 last_send_result = send_result
                 sent_briefing = bool(send_result.get("status") == "ok")
@@ -1295,10 +1106,8 @@ def run_agent_loop() -> None:
         if tool_state and not sent_briefing:
             _mark_degraded(run_state, "agent_loop_incomplete", "loop ended before an explicit final response")
             tool_state = _complete_grounded_tool_state(tool_state, run_state)
-            briefing = build_grounded_briefing(
-                tool_state,
-                error_note="Agent loop ended before an explicit final response. Sending grounded tool summary.",
-            )
+            run_state["briefing_note"] = "Agent loop ended before an explicit final response. Sending grounded tool summary."
+            briefing = build_briefing(run_state)
             send_result = _send_telegram_and_record(briefing, run_state, "End-of-loop")
             last_send_result = send_result
             sent_briefing = bool(send_result.get("status") == "ok")
