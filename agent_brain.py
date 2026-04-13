@@ -778,70 +778,219 @@ def _send_degraded_alert_if_needed(status: Dict[str, Any]) -> Dict[str, Any]:
     return status
 
 
-def _compact_status_value(value: Any) -> str:
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, default=_json_serial, sort_keys=True)
-    return "" if value is None else str(value)
-
-
 def _write_operator_report(status: Dict[str, Any]) -> None:
-    rows = [
-        ("Last Successful Run", status.get("last_successful_run_time", "")),
-        ("Last Telegram Send", status.get("last_telegram_send_time", "")),
-        ("Current Health", status.get("current_run_health", "")),
-        ("Degraded Streak", status.get("degraded_streak", 0)),
-        ("Price Timestamp", status.get("price_timestamp", "")),
-        ("Price Refresh", status.get("price_refresh_status", {})),
-        ("Macro Freshness", status.get("macro_freshness_status", {})),
-        ("Signal Freshness", status.get("signal_freshness_status", {})),
-        ("Groq", status.get("groq_result", {})),
-        ("Last Degradation Codes", ", ".join(status.get("last_degradation_codes") or [])),
-    ]
-    row_html = "\n".join(
-        "<tr><th>{}</th><td>{}</td></tr>".format(
-            html.escape(label),
-            html.escape(_compact_status_value(value)),
-        )
-        for label, value in rows
-    )
-    recent_rows = "\n".join(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            html.escape(str(item.get("completed_at", ""))),
-            html.escape(str(item.get("health", ""))),
-            html.escape(",".join(str(code) for code in item.get("degradation_codes", []) or [])),
-            html.escape(str(item.get("groq_status", ""))),
-        )
-        for item in status.get("recent_runs", [])[-RUN_HISTORY_LIMIT:]
-    )
+    def esc(value: Any) -> str:
+        return html.escape("" if value is None else str(value))
+
+    def status_class(value: Any) -> str:
+        normalized = str(value or "").lower()
+        if normalized in {"healthy", "ok", "fresh", "sent", "clear"}:
+            return "good"
+        if normalized in {"degraded", "error", "failed", "unavailable", "missing", "groq_error"}:
+            return "bad"
+        if normalized in {"retrying", "stale", "stale-but-usable", "watching", "pending"}:
+            return "warn"
+        return "neutral"
+
+    def badge(value: Any) -> str:
+        text = esc(value or "unknown")
+        return f'<span class="badge {status_class(value)}">{text}</span>'
+
+    def field(label: str, value: Any) -> str:
+        return f"<dt>{esc(label)}</dt><dd>{esc(value)}</dd>"
+
+    def badge_list(items: Any) -> str:
+        values = list(items or [])
+        if not values:
+            return '<span class="muted">None</span>'
+        return " ".join(f'<span class="pill">{esc(item)}</span>' for item in values)
+
+    def metric_list(items: Any) -> str:
+        values = list(items or [])
+        if not values:
+            return '<span class="muted">None</span>'
+        rendered = []
+        for item in values:
+            if isinstance(item, dict):
+                metric = item.get("metric", "unknown")
+                age = item.get("age_days")
+                label = f"{metric} age {age}d" if age is not None else metric
+                rendered.append(f'<span class="pill warn">{esc(label)}</span>')
+            else:
+                rendered.append(f'<span class="pill warn">{esc(item)}</span>')
+        return " ".join(rendered)
+
+    def card(title: str, body: str) -> str:
+        return f'<section class="card"><h2>{esc(title)}</h2>{body}</section>'
+
+    current_health = status.get("current_run_health", "UNKNOWN")
     summary = status.get("recent_health_summary", {}) or {}
+    price_refresh = status.get("price_refresh_status", {}) or {}
+    macro_freshness = status.get("macro_freshness_status", {}) or {}
+    signal_freshness = status.get("signal_freshness_status", {}) or {}
+    groq_result = status.get("groq_result", {}) or {}
+    degradation_codes = status.get("last_degradation_codes") or []
+    recent_runs = list(status.get("recent_runs", []) or [])[-RUN_HISTORY_LIMIT:]
+
+    summary_cards = "\n".join(
+        [
+            card(
+                "Run Health",
+                f'<p class="hero-badge">{badge(current_health)}</p>'
+                f'<dl>{field("Run ID", status.get("run_id", ""))}{field("Updated", status.get("updated_at", ""))}</dl>',
+            ),
+            card(
+                "Recent Runs",
+                "<div class=\"stat-row\">"
+                f'<div><strong>{int(summary.get("healthy") or 0)}</strong><span>Healthy</span></div>'
+                f'<div><strong>{int(summary.get("degraded") or 0)}</strong><span>Degraded</span></div>'
+                f'<div><strong>{int(status.get("degraded_streak") or 0)}</strong><span>Streak</span></div>'
+                "</div>",
+            ),
+            card(
+                "Last Successful Run",
+                f'<dl>{field("Run", status.get("last_successful_run_time", ""))}'
+                f'{field("Telegram", status.get("last_telegram_send_time", ""))}'
+                f'{field("Price", status.get("price_timestamp", ""))}</dl>',
+            ),
+        ]
+    )
+
+    detail_cards = "\n".join(
+        [
+            card(
+                "Price Refresh",
+                "<dl>"
+                f"<dt>Status</dt><dd>{badge(price_refresh.get('status', 'unknown'))}</dd>"
+                f'{field("Inserted", price_refresh.get("inserted", ""))}'
+                f'{field("Message", price_refresh.get("message", ""))}'
+                f'{field("Last Refresh", status.get("last_price_refresh_time", ""))}'
+                "</dl>",
+            ),
+            card(
+                "Macro Freshness",
+                "<dl>"
+                f"<dt>Status</dt><dd>{badge(macro_freshness.get('status', 'unknown'))}</dd>"
+                f'<dt>Available</dt><dd>{badge_list(macro_freshness.get("available_metrics"))}</dd>'
+                f'<dt>Missing</dt><dd>{badge_list(macro_freshness.get("missing_metrics"))}</dd>'
+                f'<dt>Stale</dt><dd>{metric_list(macro_freshness.get("stale_metrics"))}</dd>'
+                f'<dt>Degraded</dt><dd>{metric_list(macro_freshness.get("degraded_metrics"))}</dd>'
+                "</dl>",
+            ),
+            card(
+                "Signal Freshness",
+                "<dl>"
+                f"<dt>Status</dt><dd>{badge(signal_freshness.get('status', 'unknown'))}</dd>"
+                f'{field("Latest Signal", signal_freshness.get("latest_signal_time", ""))}'
+                f'{field("Age Hours", signal_freshness.get("age_hours", ""))}'
+                f'{field("Count", signal_freshness.get("count", ""))}'
+                "</dl>",
+            ),
+            card(
+                "Groq",
+                "<dl>"
+                f"<dt>Status</dt><dd>{badge(groq_result.get('status', 'unknown'))}</dd>"
+                f'{field("Retry Count", groq_result.get("retry_count", ""))}'
+                f'{field("Last Status Code", groq_result.get("last_status_code", ""))}'
+                f'{field("Message", groq_result.get("message", ""))}'
+                "</dl>",
+            ),
+            card(
+                "Last Degradation Codes",
+                f'<div class="code-list">{badge_list(degradation_codes)}</div>',
+            ),
+        ]
+    )
+
+    recent_rows = "\n".join(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+            esc(item.get("completed_at", "")),
+            badge(item.get("health", "unknown")),
+            badge(item.get("macro_freshness", "unknown")),
+            badge(item.get("signal_freshness", "unknown")),
+            badge(item.get("groq_status", "unknown")),
+            badge(item.get("telegram_status", "unknown")),
+            badge_list(item.get("degradation_codes", [])),
+        )
+        for item in reversed(recent_runs)
+    )
+
     html_doc = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="10">
   <title>GeoClaw Agent Brain Status</title>
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; color: #172026; background: #f8faf9; }}
-    h1, h2 {{ font-size: 20px; margin: 0 0 12px; }}
-    h2 {{ margin-top: 24px; }}
-    table {{ border-collapse: collapse; width: 100%; max-width: 1100px; background: #ffffff; }}
-    th, td {{ border: 1px solid #c9d3d0; padding: 8px; text-align: left; vertical-align: top; font-size: 14px; }}
-    th {{ width: 220px; background: #eef3f1; }}
-    .status {{ font-weight: 700; }}
+    :root {{ color-scheme: light; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; color: #15201d; background: #f6f8f7; }}
+    main {{ max-width: 1220px; margin: 0 auto; padding: 28px 20px 40px; }}
+    header {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 18px; }}
+    h1 {{ font-size: 28px; margin: 0 0 6px; letter-spacing: 0; }}
+    h2 {{ font-size: 16px; margin: 0 0 12px; letter-spacing: 0; }}
+    p {{ margin: 0; }}
+    table {{ border-collapse: collapse; width: 100%; background: #ffffff; border: 1px solid #d3ddd9; }}
+    th, td {{ border-bottom: 1px solid #dbe4e0; padding: 10px; text-align: left; vertical-align: top; font-size: 14px; }}
+    th {{ background: #edf3f0; color: #41524c; font-weight: 650; }}
+    tr:last-child td {{ border-bottom: 0; }}
+    dl {{ display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 12px; margin: 0; }}
+    dt {{ color: #60706a; font-size: 13px; }}
+    dd {{ margin: 0; min-width: 0; overflow-wrap: anywhere; }}
+    .subtle {{ color: #66756f; font-size: 14px; }}
+    .refresh {{ text-align: right; color: #66756f; font-size: 13px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 16px 0; }}
+    .card {{ background: #ffffff; border: 1px solid #d3ddd9; border-radius: 8px; padding: 16px; box-shadow: 0 1px 2px rgba(21, 32, 29, 0.06); }}
+    .badge {{ display: inline-flex; align-items: center; min-height: 24px; border-radius: 8px; padding: 3px 9px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0; border: 1px solid transparent; }}
+    .badge.good {{ color: #0f5132; background: #dff3e7; border-color: #b7dfc8; }}
+    .badge.warn {{ color: #664d03; background: #fff2c8; border-color: #e8d485; }}
+    .badge.bad {{ color: #842029; background: #f8d7da; border-color: #e5a5ab; }}
+    .badge.neutral {{ color: #34433e; background: #e8eeeb; border-color: #cbd7d2; }}
+    .pill {{ display: inline-flex; margin: 0 4px 4px 0; border-radius: 8px; padding: 3px 8px; background: #edf3f0; border: 1px solid #d3ddd9; font-size: 12px; }}
+    .pill.warn {{ background: #fff2c8; border-color: #e8d485; color: #664d03; }}
+    .muted {{ color: #7c8a84; }}
+    .hero-badge .badge {{ font-size: 18px; min-height: 34px; padding: 5px 12px; }}
+    .stat-row {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }}
+    .stat-row div {{ border: 1px solid #dbe4e0; border-radius: 8px; padding: 10px; background: #f8fbfa; }}
+    .stat-row strong {{ display: block; font-size: 24px; line-height: 1.1; }}
+    .stat-row span {{ color: #66756f; font-size: 13px; }}
+    .table-card {{ margin-top: 16px; overflow-x: auto; }}
+    .source {{ margin-top: 8px; color: #66756f; font-size: 13px; }}
   </style>
 </head>
 <body>
-  <h1>GeoClaw Agent Brain Status</h1>
-  <p class="status">Current health: {html.escape(str(status.get("current_run_health", "")))}</p>
-  <p>Recent runs: {int(summary.get("healthy") or 0)} healthy, {int(summary.get("degraded") or 0)} degraded.</p>
-  <table>
-{row_html}
-  </table>
-  <h2>Recent Runs</h2>
-  <table>
-    <tr><th>Completed At</th><th>Health</th><th>Codes</th><th>Groq</th></tr>
+  <main>
+    <header>
+      <div>
+        <h1>GeoClaw Agent Brain Status</h1>
+        <p class="subtle">Read-only local operator dashboard.</p>
+        <p class="source">Data source: logs/agent_brain.status.json</p>
+      </div>
+      <div class="refresh">Auto-refresh every 10 seconds<br>Next reload in <span id="refresh-countdown">10</span>s</div>
+    </header>
+    <section class="grid">
+{summary_cards}
+    </section>
+    <section class="grid">
+{detail_cards}
+    </section>
+    <section class="card table-card">
+      <h2>Recent Run History</h2>
+      <table>
+        <tr><th>Completed At</th><th>Health</th><th>Macro</th><th>Signals</th><th>Groq</th><th>Telegram</th><th>Codes</th></tr>
 {recent_rows}
-  </table>
+      </table>
+    </section>
+  </main>
+  <script>
+    let remaining = 10;
+    const countdown = document.getElementById("refresh-countdown");
+    setInterval(() => {{
+      remaining = Math.max(0, remaining - 1);
+      if (countdown) countdown.textContent = String(remaining);
+    }}, 1000);
+  </script>
 </body>
 </html>
 """
