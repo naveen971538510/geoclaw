@@ -5,6 +5,8 @@ import smtplib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 
 logger = logging.getLogger("geoclaw.alerts")
@@ -56,6 +58,7 @@ class AlertService:
         self.smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
         self.webhook_url = os.environ.get("ALERT_WEBHOOK_URL", "")
+        self.slack_webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
         self.desktop = os.environ.get("ALERT_DESKTOP", "true").lower() == "true"
 
     def _cooldown_ok(self, alert_name, cooldown_hours):
@@ -256,6 +259,95 @@ class AlertService:
         except Exception as exc:
             logger.error("Webhook failed: %s", exc)
 
+    def _send_slack(self, title, body, emoji="🚨"):
+        """Send a rich Slack message using Block Kit."""
+        if not self.slack_webhook:
+            return
+        try:
+            import urllib.request
+            ts = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+            body_short = str(body or "")[:3000]
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": f"{emoji} GeoClaw: {str(title or '')[:150]}", "emoji": True},
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": body_short},
+                },
+                {
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": f"GeoClaw Intelligence · {ts}"}],
+                },
+            ]
+            payload = json.dumps({"blocks": blocks, "text": f"GeoClaw: {title}"}).encode()
+            req = urllib.request.Request(
+                self.slack_webhook,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
+            logger.info("Slack alert sent: %s", title)
+        except Exception as exc:
+            logger.error("Slack failed: %s", exc)
+
+    def _send_email_rich(self, title, body):
+        """Send a formatted HTML email via SMTP."""
+        if not (self.email_from and self.email_to and self.email_pass):
+            return
+        try:
+            ts = datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+            body_html = str(body or "").replace("\n", "<br>")
+            html = f"""<!DOCTYPE html>
+<html><body style="font-family:Arial,sans-serif;background:#0b1016;color:#e6edf3;padding:24px;max-width:600px">
+  <div style="background:#111826;border-radius:10px;padding:20px;border:1px solid #263244">
+    <h2 style="color:#4da3ff;margin-top:0">🌐 GeoClaw Alert</h2>
+    <h3 style="color:#e6edf3">{title}</h3>
+    <div style="color:#c9d1d9;line-height:1.7;margin-top:12px">{body_html}</div>
+    <hr style="border-color:#263244;margin:20px 0">
+    <p style="color:#8b949e;font-size:12px;margin:0">GeoClaw Intelligence · {ts}</p>
+  </div>
+</body></html>"""
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"GeoClaw Alert: {title}"
+            msg["From"] = self.email_from
+            msg["To"] = self.email_to
+            msg.attach(MIMEText(f"{body}\n\n---\nGeoClaw | {ts}", "plain"))
+            msg.attach(MIMEText(html, "html"))
+            with smtplib.SMTP(self.smtp_host, self.smtp_port) as smtp:
+                smtp.ehlo()
+                smtp.starttls()
+                smtp.login(self.email_from, self.email_pass)
+                smtp.send_message(msg)
+            logger.info("Email alert sent: %s", title)
+        except Exception as exc:
+            logger.error("Email failed: %s", exc)
+
+    def send_briefing(self, briefing_text: str, title: str = "GeoClaw Daily Briefing"):
+        """Deliver a full briefing to all configured channels (Slack, Email, Telegram)."""
+        if not briefing_text:
+            return
+        # Slack — split into chunks if needed (Slack block text max is 3000 chars)
+        if self.slack_webhook:
+            chunks = [briefing_text[i:i+2800] for i in range(0, len(briefing_text), 2800)]
+            for idx, chunk in enumerate(chunks):
+                part_title = title if idx == 0 else f"{title} (cont. {idx+1}/{len(chunks)})"
+                self._send_slack(part_title, chunk, emoji="📊")
+        # Email — full text, HTML formatted
+        if self.email_from and self.email_to and self.email_pass:
+            self._send_email_rich(title, briefing_text)
+        # Telegram
+        try:
+            from services.telegram_bot import TelegramBot
+            telegram = TelegramBot(self.db_path)
+            if telegram.available():
+                telegram.send_alert(title, briefing_text[:4000])
+        except Exception:
+            pass
+        logger.info("Briefing delivered via configured channels")
+
     def fire(self, title, body, alert_name="manual", cooldown_hours=2, payload=None):
         if not self._cooldown_ok(alert_name, cooldown_hours):
             return False
@@ -263,9 +355,11 @@ class AlertService:
         if self.desktop:
             self._send_desktop(title, body)
         if self.email_from:
-            self._send_email(title, body)
+            self._send_email_rich(title, body)
         if self.webhook_url:
             self._send_webhook(title, body)
+        if self.slack_webhook:
+            self._send_slack(title, body)
         try:
             from services.telegram_bot import TelegramBot
 

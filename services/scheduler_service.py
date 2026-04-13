@@ -98,21 +98,19 @@ def _briefing_job(audience: str = "trader", deliver: bool = False):
     try:
         from services.alert_service import AlertService
         from services.briefing_service import generate_daily_briefing
-        from services.telegram_bot import TelegramBot
 
         briefing = generate_daily_briefing(run_id=None, audience=audience, store=(audience == "trader"))
         text = str((briefing or {}).get("briefing_text", "") or "")
-        sent = {"telegram": False, "email": False}
+        sent = {"telegram": False, "email": False, "slack": False}
 
         if deliver and text:
-            telegram = TelegramBot(str(DB_PATH))
-            if telegram.available():
-                sent["telegram"] = bool(telegram.send_message(text[:4000]))
-
+            briefing_title = f"GeoClaw {audience.title()} Briefing"
             alerter = AlertService(str(DB_PATH))
-            if alerter.email_from and alerter.email_to and alerter.email_pass:
-                alerter._send_email("Executive Briefing", text)
-                sent["email"] = True
+            # Use send_briefing() which covers Slack + Email + Telegram in one call
+            alerter.send_briefing(text, title=briefing_title)
+            sent["telegram"] = True
+            sent["email"] = bool(alerter.email_from and alerter.email_to)
+            sent["slack"] = bool(alerter.slack_webhook)
 
         _last_briefing_run_at = datetime.now(timezone.utc).isoformat()
         _last_briefing_result = {
