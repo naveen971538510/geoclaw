@@ -22,6 +22,7 @@ def _load_local_env(path: Path):
     if not path.exists():
         return
     try:
+        pairs = []
         for raw in path.read_text().splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -33,6 +34,15 @@ def _load_local_env(path: Path):
                 value = value[1:-1]
             elif value.startswith("'") and value.endswith("'"):
                 value = value[1:-1]
+            pairs.append((key, value))
+
+        force_sqlite = any(
+            key == "GEOCLAW_DB_BACKEND" and value.strip().lower() in {"sqlite", "sqlite3", "local"}
+            for key, value in pairs
+        )
+        for key, value in pairs:
+            if force_sqlite and key in {"DATABASE_URL", "POSTGRES_URL"}:
+                continue
             if key and os.getenv(key) is None:
                 os.environ[key] = value
     except Exception as exc:
@@ -90,6 +100,7 @@ AGENT_AUTONOMOUS_GOAL_INTERVAL_RUNS = 3
 AGENT_BRIEFING_INTERVAL_HOURS = 23
 
 ENABLE_RSS = True
+ENABLE_SOCIAL_MEDIA = _clean_env("ENABLE_SOCIAL_MEDIA").lower() not in {"0", "false", "no", "off"}
 ENABLE_GDELT = True
 ENABLE_NEWSAPI = bool(NEWSAPI_KEY)
 ENABLE_GUARDIAN = bool(GUARDIAN_API_KEY)

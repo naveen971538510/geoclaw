@@ -21,7 +21,8 @@ PRAGMAS = (
     "PRAGMA synchronous=NORMAL;",
 )
 
-_USE_POSTGRES = bool((os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or "").strip())
+_FORCE_SQLITE = os.environ.get("GEOCLAW_DB_BACKEND", "").strip().lower() in {"sqlite", "sqlite3", "local"}
+_USE_POSTGRES = (not _FORCE_SQLITE) and bool((os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or "").strip())
 
 
 def _pg_url() -> str:
@@ -61,11 +62,10 @@ def _to_pg_sql(sql: str) -> str:
 
 
 class _PgConn:
-    """Thin wrapper so callers can use `conn.execute()` / `conn.executemany()` like sqlite3."""
+    """Thin wrapper so callers can use sqlite-like connection methods on Postgres."""
 
     def __init__(self):
         import psycopg2
-        import psycopg2.extras
         self._conn = psycopg2.connect(_pg_url(), connect_timeout=10)
         self._conn.autocommit = False
 
@@ -75,25 +75,41 @@ class _PgConn:
 
     @row_factory.setter
     def row_factory(self, _value):
-        # Emulate sqlite3 row_factory assignment; we always use RealDictCursor for Postgres.
+        # Emulate sqlite3 row_factory assignment.
         pass
 
-    def execute(self, sql: str, params: Sequence = ()):
+    def cursor(self):
         import psycopg2.extras
-        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(_to_pg_sql(sql), tuple(params or ()))
-        return _PgCursor(cur)
+        return _PgCursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+
+    def execute(self, sql: str, params: Sequence = ()):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
 
     def executemany(self, sql: str, params_list):
-        cur = self._conn.cursor()
-        cur.executemany(_to_pg_sql(sql), list(params_list or []))
-        return _PgCursor(cur)
+        cur = self.cursor()
+        cur.executemany(sql, params_list)
+        return cur
 
     def commit(self):
         self._conn.commit()
 
+    def rollback(self):
+        self._conn.rollback()
+
     def close(self):
         self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, _tb):
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        self.close()
 
 
 class _PgCursor:
@@ -102,20 +118,30 @@ class _PgCursor:
 
     @property
     def lastrowid(self):
-        # Postgres doesn't have lastrowid; use RETURNING id where possible.
-        # For now return None — callers that need lastrowid must use RETURNING.
         return None
 
     @property
     def rowcount(self):
         return self._cur.rowcount
 
+    def execute(self, sql: str, params: Sequence = ()):
+        self._cur.execute(_to_pg_sql(sql), tuple(params or ()))
+        return self
+
+    def executemany(self, sql: str, params_list):
+        self._cur.executemany(_to_pg_sql(sql), list(params_list or []))
+        return self
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        return dict(row) if row is not None else None
+
     def fetchall(self):
-        try:
-            rows = self._cur.fetchall()
-            return [dict(r) for r in rows]
-        except Exception:
-            return []
+        rows = self._cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def close(self):
+        self._cur.close()
 
 
 def get_conn(db_path=None):
