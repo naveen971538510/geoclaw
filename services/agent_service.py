@@ -10,6 +10,7 @@ from config import (
     ENABLE_GUARDIAN,
     ENABLE_NEWSAPI,
     ENABLE_RSS,
+    ENABLE_SOCIAL_MEDIA,
     GDELT_STATE_FILE,
 )
 from market import fetch_and_store_market_snapshots, get_latest_market_snapshots
@@ -22,35 +23,35 @@ TOPIC_QUERIES = [
     {
         "name": "macro_broad",
         "query": '(oil OR gold OR fed OR inflation OR sanctions OR opec OR currency OR recession)',
-        "enabled_sources": ["rss", "gdelt", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "gdelt", "newsapi", "guardian"],
     },
     {
         "name": "oil",
         "query": '(oil OR brent OR wti OR crude OR opec OR refinery OR tanker)',
-        "enabled_sources": ["rss", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "newsapi", "guardian"],
     },
     {
         "name": "gold",
         "query": '(gold OR bullion OR xau OR safe haven)',
-        "enabled_sources": ["rss", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "newsapi", "guardian"],
     },
     {
         "name": "fx",
         "query": '(forex OR currency OR currencies OR usd OR gbp OR eur OR yen OR sterling OR fx)',
-        "enabled_sources": ["rss", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "newsapi", "guardian"],
     },
     {
         "name": "rates",
         "query": '(fed OR boe OR ecb OR interest rate OR bond yield OR treasury OR cpi OR inflation)',
-        "enabled_sources": ["rss", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "newsapi", "guardian"],
     },
     {
         "name": "equities_geopolitics",
         "query": '(stocks OR equities OR shares OR nasdaq OR s&p OR dow OR ftse OR nikkei OR war OR sanctions OR tariff OR strike OR conflict)',
-        "enabled_sources": ["rss", "newsapi", "guardian"],
+        "enabled_sources": ["rss", "social", "newsapi", "guardian"],
     },
 ]
-QUERY_INSENSITIVE_SOURCES = {"rss"}
+QUERY_INSENSITIVE_SOURCES = {"rss", "social"}
 
 
 def get_conn():
@@ -77,6 +78,8 @@ def _active_sources(enabled_sources: List[str]) -> List[str]:
     for raw_name in enabled_sources or []:
         name = str(raw_name or "").strip().lower()
         if name == "rss" and ENABLE_RSS:
+            active.append(name)
+        elif name == "social" and ENABLE_SOCIAL_MEDIA:
             active.append(name)
         elif name == "gdelt" and ENABLE_GDELT and not _gdelt_cooldown_active():
             active.append(name)

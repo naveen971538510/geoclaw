@@ -10,6 +10,7 @@ from config import (
     ENABLE_GUARDIAN,
     ENABLE_NEWSAPI,
     ENABLE_RSS,
+    ENABLE_SOCIAL_MEDIA,
     DEFAULT_WATCHLIST,
     ALERT_MIN_IMPACT_SCORE,
     ALERT_MIN_ALERT_TAGS,
@@ -19,7 +20,7 @@ from config import (
 from intelligence import normalize_article, classify_article, dedupe_articles, rank_article, suppress_articles
 from intelligence.classify import check_contradiction
 from intelligence.quality import looks_low_quality, normalize_headline
-from sources import RSSSource, GDELTSource, NewsAPISource, GuardianSource
+from sources import RSSSource, GDELTSource, NewsAPISource, GuardianSource, SocialMediaSource
 from services.db_helpers import get_conn as shared_get_conn
 from services.llm_service import analyse_article_meta, analyse_cluster_meta, new_llm_run_state, summarize_llm_run_state
 from services.reasoning_service import build_reasoning_chain
@@ -381,6 +382,8 @@ def _get_sources(enabled_sources=None):
 
     if ENABLE_RSS and allowed("rss"):
         out.append(("rss", RSSSource()))
+    if ENABLE_SOCIAL_MEDIA and allowed("social"):
+        out.append(("social", SocialMediaSource()))
     if ENABLE_GDELT and allowed("gdelt"):
         out.append(("gdelt", GDELTSource()))
     if ENABLE_NEWSAPI and allowed("newsapi"):
