@@ -134,6 +134,56 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for macro-financial information using DuckDuckGo. Returns top results with snippets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g. 'Fed rate decision June 2026')",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_breaking_news",
+            "description": "Fetch the latest breaking macro/geopolitical news from configured sources.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "research_thesis",
+            "description": "Deep-dive research on a specific thesis — gathers supporting and contradicting evidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thesis_key": {
+                        "type": "string",
+                        "description": "The thesis key/title to research",
+                    }
+                },
+                "required": ["thesis_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_active_theses",
+            "description": "Retrieve current active investment theses with confidence scores and status.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 
@@ -608,6 +658,146 @@ def tool_assess_market_bias(run_state: Optional[Dict[str, Any]] = None) -> Dict:
     return result
 
 
+# ─────────────────────────────────────────────
+# AGENTIC TOOLS (web search, news, thesis research)
+# ─────────────────────────────────────────────
+
+def tool_web_search(query: str = "", run_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+    """DuckDuckGo search → top results with titles/snippets/URLs."""
+    query = str(query or kwargs.get("query") or "").strip()
+    if not query:
+        return {"results": [], "error": "Empty query"}
+    try:
+        resp = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={"User-Agent": "GeoClaw/1.0"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        # Simple extraction of result titles and snippets from HTML
+        results = []
+        from html import unescape
+        import re
+        blocks = re.findall(r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</span>', resp.text, re.DOTALL)
+        for url_raw, title_raw, snippet_raw in blocks[:8]:
+            title = re.sub(r'<[^>]+>', '', unescape(title_raw)).strip()
+            snippet = re.sub(r'<[^>]+>', '', unescape(snippet_raw)).strip()
+            # DuckDuckGo wraps URLs in a redirect
+            url_match = re.search(r'uddg=([^&]+)', url_raw)
+            url = requests.utils.unquote(url_match.group(1)) if url_match else url_raw
+            results.append({"title": title[:200], "snippet": snippet[:300], "url": url[:500]})
+        return {"query": query, "results": results, "count": len(results)}
+    except Exception as exc:
+        return {"query": query, "results": [], "error": str(exc)}
+
+
+def tool_fetch_breaking_news(run_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+    """Fetch latest articles from all configured sources."""
+    articles = []
+    try:
+        from sources.rss_client import fetch_rss_articles
+        articles.extend(fetch_rss_articles()[:5])
+    except Exception:
+        pass
+    try:
+        from sources.gdelt_client import fetch_gdelt_articles
+        articles.extend(fetch_gdelt_articles()[:5])
+    except Exception:
+        pass
+    try:
+        from sources.bluesky_client import fetch_bluesky_articles
+        articles.extend(fetch_bluesky_articles()[:3])
+    except Exception:
+        pass
+    try:
+        from sources.reddit_client import fetch_reddit_articles
+        articles.extend(fetch_reddit_articles(limit_per_sub=2)[:5])
+    except Exception:
+        pass
+    return {
+        "articles": [
+            {"headline": str(a.get("headline", ""))[:200], "source": str(a.get("source", "")), "url": str(a.get("url", ""))}
+            for a in articles
+        ],
+        "count": len(articles),
+    }
+
+
+def tool_research_thesis(thesis_key: str = "", run_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+    """Deep-dive on a thesis — gather supporting/contradicting evidence."""
+    thesis_key = str(thesis_key or kwargs.get("thesis_key") or "").strip()
+    if not thesis_key:
+        return {"error": "No thesis_key provided"}
+
+    evidence = {"supporting": [], "contradicting": [], "neutral": []}
+
+    # 1. Search web for thesis topic
+    search_result = tool_web_search(query=thesis_key, run_state=run_state)
+    for r in search_result.get("results", [])[:5]:
+        evidence["neutral"].append({"type": "web_search", "title": r.get("title", ""), "snippet": r.get("snippet", "")})
+
+    # 2. Check existing theses for related/contradicting signals
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT thesis_key, confidence, terminal_risk, status
+            FROM agent_theses
+            WHERE thesis_key LIKE ? AND COALESCE(status, '') != 'superseded'
+            ORDER BY confidence DESC LIMIT 5
+            """,
+            (f"%{thesis_key[:30]}%",),
+        ).fetchall()
+        conn.close()
+        for row in rows:
+            r = dict(row)
+            evidence["supporting" if float(r.get("confidence") or 0) > 0.6 else "contradicting"].append(
+                {"type": "related_thesis", "thesis": str(r.get("thesis_key", ""))[:120], "confidence": r.get("confidence")}
+            )
+    except Exception:
+        pass
+
+    return {
+        "thesis_key": thesis_key,
+        "evidence_count": sum(len(v) for v in evidence.values()),
+        "evidence": evidence,
+    }
+
+
+def tool_get_active_theses(run_state: Optional[Dict[str, Any]] = None, **kwargs) -> Dict[str, Any]:
+    """Retrieve current active investment theses with confidence and status."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT thesis_key, confidence, terminal_risk, status, watchlist_suggestion
+            FROM agent_theses
+            WHERE COALESCE(status, '') NOT IN ('superseded', 'expired')
+            ORDER BY confidence DESC
+            LIMIT 15
+            """,
+        ).fetchall()
+        conn.close()
+        theses = [
+            {
+                "thesis_key": str(dict(r).get("thesis_key", ""))[:200],
+                "confidence": float(dict(r).get("confidence") or 0),
+                "terminal_risk": str(dict(r).get("terminal_risk", "")),
+                "status": str(dict(r).get("status", "")),
+                "watchlist": str(dict(r).get("watchlist_suggestion", "")),
+            }
+            for r in rows
+        ]
+        return {"theses": theses, "count": len(theses)}
+    except Exception as exc:
+        return {"theses": [], "count": 0, "error": str(exc)}
+
+
 def _read_operator_status() -> Dict[str, Any]:
     try:
         if STATUS_FILE.exists():
@@ -1035,6 +1225,10 @@ TOOL_MAP = {
     "get_price_data": lambda args: tool_get_price_data(run_state=_CURRENT_RUN_STATE),
     "get_macro_metrics": lambda args: tool_get_macro_metrics(run_state=_CURRENT_RUN_STATE),
     "assess_market_bias": lambda args: tool_assess_market_bias(run_state=_CURRENT_RUN_STATE),
+    "web_search": lambda args: tool_web_search(run_state=_CURRENT_RUN_STATE, **args),
+    "fetch_breaking_news": lambda args: tool_fetch_breaking_news(run_state=_CURRENT_RUN_STATE),
+    "research_thesis": lambda args: tool_research_thesis(run_state=_CURRENT_RUN_STATE, **args),
+    "get_active_theses": lambda args: tool_get_active_theses(run_state=_CURRENT_RUN_STATE),
 }
 
 
