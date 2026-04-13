@@ -318,6 +318,27 @@
       </div>
     </section>
 
+    <!-- ── NEW: Backtest Results ──────────────────────────────────────── -->
+    <section class="panel" style="margin-top:18px" id="gc-backtest-panel">
+      <h2 style="display:flex;align-items:center;gap:10px">
+        Backtest
+        <span style="font-size:11px;color:#8b949e;font-weight:400">based on closed predictions</span>
+        <button onclick="gcLoadBacktest()" style="margin-left:auto;font-size:11px;background:#1c2a3a;border:1px solid #263244;color:#8b949e;border-radius:6px;padding:3px 10px;cursor:pointer">↻ Refresh</button>
+      </h2>
+      <div id="gc-backtest-stats" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px"></div>
+      <div id="gc-backtest-curve" style="font-family:monospace;font-size:11px;color:#8b949e;margin-bottom:10px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#8b949e;margin-bottom:6px">By Asset</div>
+          <div id="gc-backtest-assets"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#8b949e;margin-bottom:6px">By Confidence</div>
+          <div id="gc-backtest-conf"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ── NEW: Investigation Journal ────────────────────────────────── -->
     <section class="panel" style="margin-top:18px" id="gc-investigations-panel">
       <h2>Agent Investigation Journal</h2>
@@ -934,6 +955,69 @@
       }).join('');
     }
 
+    // ── NEW: Backtest ─────────────────────────────────────────────────
+    async function gcLoadBacktest(){
+      try {
+        const data = await fetchJson('/api/backtest/results');
+        const s = data.stats || {};
+        const statsEl = document.getElementById('gc-backtest-stats');
+        if (statsEl) {
+          const retCol = s.total_return_pct >= 0 ? '#3fb950' : '#f85149';
+          const wrCol  = s.win_rate_pct >= 55 ? '#3fb950' : s.win_rate_pct >= 45 ? '#e3b341' : '#f85149';
+          statsEl.innerHTML = [
+            ['Predictions', s.total_predictions || 0],
+            ['Win Rate',    `<span style="color:${wrCol}">${(s.win_rate_pct||0).toFixed(1)}%</span>`],
+            ['Total Return',`<span style="color:${retCol}">${s.total_return_pct >= 0 ? '+' : ''}${(s.total_return_pct||0).toFixed(1)}%</span>`],
+            ['Sharpe',      (s.sharpe_ratio||0).toFixed(2)],
+            ['Max DD',      `-${(s.max_drawdown_pct||0).toFixed(1)}%`],
+            ['Prof. Factor',(s.profit_factor||0).toFixed(2)],
+          ].map(([k,v]) => `<div class="counter"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+        }
+        // Mini ASCII equity curve
+        const curveEl = document.getElementById('gc-backtest-curve');
+        if (curveEl && (data.equity_curve||[]).length > 1) {
+          const pts = (data.equity_curve||[]).map(p => p.equity);
+          const mn = Math.min(...pts), mx = Math.max(...pts), rng = mx - mn || 1;
+          const W = 60, H = 5;
+          const grid = Array.from({length:H}, () => Array(W).fill(' '));
+          pts.slice(-W).forEach((v,x) => {
+            const y = H - 1 - Math.round(((v - mn) / rng) * (H - 1));
+            if (grid[y]) grid[y][x] = '█';
+          });
+          curveEl.textContent = grid.map(row => row.join('')).join('\n') +
+            `\n${mn.toFixed(0)}` + ' '.repeat(W - 12) + `${mx.toFixed(0)}`;
+        } else if (curveEl) {
+          curveEl.textContent = data.message || 'No data yet';
+        }
+        // Per asset
+        const assetsEl = document.getElementById('gc-backtest-assets');
+        if (assetsEl) {
+          const assets = data.per_asset || [];
+          assetsEl.innerHTML = assets.length ? assets.slice(0,8).map(a => {
+            const col = a.win_rate >= 55 ? '#3fb950' : a.win_rate >= 45 ? '#e3b341' : '#f85149';
+            return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid #1c2a3a">
+              <span style="color:#e6edf3">${esc(a.symbol)}</span>
+              <span style="color:#8b949e">${a.total} trades</span>
+              <span style="color:${col}">${a.win_rate.toFixed(1)}%</span>
+            </div>`;
+          }).join('') : '<div class="muted">No data</div>';
+        }
+        // Per confidence
+        const confEl = document.getElementById('gc-backtest-conf');
+        if (confEl) {
+          const conf = data.per_confidence || [];
+          confEl.innerHTML = conf.length ? conf.map(c => {
+            const col = c.win_rate >= 55 ? '#3fb950' : c.win_rate >= 45 ? '#e3b341' : '#f85149';
+            return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;border-bottom:1px solid #1c2a3a">
+              <span style="color:#e6edf3">${esc(c.bucket)}%</span>
+              <span style="color:#8b949e">${c.total} trades</span>
+              <span style="color:${col}">${c.win_rate.toFixed(1)}%</span>
+            </div>`;
+          }).join('') : '<div class="muted">No data</div>';
+        }
+      } catch(e) { console.warn('Backtest load error:', e); }
+    }
+
     // ── NEW: Load all 6 new panels together ──────────────────────────
     async function gcLoadIntelPanels(){
       try {
@@ -1128,11 +1212,13 @@
 
     loadDashboard();
     gcLoadIntelPanels();
+    gcLoadBacktest();
     gcLoadTicker();
     initDashboardEventStream();
     setInterval(gcLoadTicker, 60000);
     setInterval(loadDashboard, 300000);
     setInterval(gcLoadIntelPanels, 30000);
+    setInterval(gcLoadBacktest, 120000);
   </script>
   <script>
     if ("serviceWorker" in navigator) {

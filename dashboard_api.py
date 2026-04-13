@@ -811,6 +811,21 @@ def portfolio_signal_action(signal_id: int, body: dict):
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
+@app.get("/api/backtest/results")
+def backtest_results(min_confidence: float = 0.0, symbol: str = "", limit: int = 500):
+    """P&L backtest over all closed thesis predictions."""
+    try:
+        from backtest import run_backtest
+        result = run_backtest(
+            min_confidence=min_confidence,
+            symbol_filter=symbol,
+            limit=limit,
+        )
+        return JSONResponse({"status": "ok", **result})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "geoclaw-dashboard"}
