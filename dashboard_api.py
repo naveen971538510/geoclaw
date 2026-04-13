@@ -734,6 +734,114 @@ async def api_stream(request: Request):
     )
 
 
+# ---------------------------------------------------------------------------
+# Agentic intelligence endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent/reactive/status")
+def api_reactive_status():
+    try:
+        from services.reactive_agent import get_reactive_agent
+        agent = get_reactive_agent()
+        return JSONResponse({"status": "ok", **agent.status()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/agent/llm/status")
+def api_llm_status():
+    try:
+        from services.llm_router import get_status
+        return JSONResponse({"status": "ok", **get_status()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/events/live")
+def api_events_live(since: float = 0):
+    try:
+        from services.event_bus import get_bus
+        bus = get_bus()
+        events = bus.get_recent(since_timestamp=float(since or 0))
+        return JSONResponse({"status": "ok", "events": events, "count": len(events)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/theses/confidence")
+def api_theses_confidence():
+    try:
+        from services.db_helpers import query
+        rows = query(
+            """
+            SELECT thesis_key, confidence, terminal_risk, status, watchlist_suggestion
+            FROM agent_theses
+            WHERE COALESCE(status, '') NOT IN ('superseded', 'expired')
+            ORDER BY confidence DESC
+            LIMIT 20
+            """
+        )
+        theses = []
+        for r in rows:
+            d = dict(r)
+            theses.append({
+                "thesis_key": str(d.get("thesis_key", ""))[:200],
+                "confidence": float(d.get("confidence") or 0),
+                "terminal_risk": str(d.get("terminal_risk", "")),
+                "status": str(d.get("status", "")),
+                "watchlist": str(d.get("watchlist_suggestion", "")),
+            })
+        return JSONResponse({"status": "ok", "theses": theses, "count": len(theses)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/predictions/board")
+def api_predictions_board():
+    try:
+        from services.db_helpers import query
+        rows = query(
+            """
+            SELECT thesis_key, predicted_direction, symbol, price_at_prediction,
+                   price_at_check, actual_change_pct, outcome, outcome_note, checked_at
+            FROM thesis_predictions
+            ORDER BY id DESC
+            LIMIT 50
+            """
+        )
+        predictions = [dict(r) for r in rows]
+        # Compute accuracy stats
+        closed = [p for p in predictions if str(p.get("outcome") or "") in {"verified", "refuted"}]
+        verified = sum(1 for p in closed if p.get("outcome") == "verified")
+        refuted = sum(1 for p in closed if p.get("outcome") == "refuted")
+        pending = sum(1 for p in predictions if str(p.get("outcome") or "") not in {"verified", "refuted", "neutral"})
+        accuracy = (verified / max(verified + refuted, 1)) * 100
+        return JSONResponse({
+            "status": "ok",
+            "predictions": predictions,
+            "stats": {
+                "verified": verified,
+                "refuted": refuted,
+                "pending": pending,
+                "accuracy_pct": round(accuracy, 1),
+                "total_closed": verified + refuted,
+            },
+        })
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/agent/investigations")
+def api_investigations():
+    try:
+        from services.reactive_agent import get_reactive_agent
+        agent = get_reactive_agent()
+        investigations = agent.get_investigations(limit=30)
+        return JSONResponse({"status": "ok", "investigations": investigations, "count": len(investigations)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "geoclaw-dashboard"}
