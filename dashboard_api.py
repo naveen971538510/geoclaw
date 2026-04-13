@@ -4,6 +4,7 @@ GeoClaw dashboard API — FastAPI on port 8001.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -664,15 +665,16 @@ async def api_stream(request: Request):
     Connect with: const es = new EventSource('/api/stream')
     Auth: same rules as the rest of /api/* (GEOCLAW_LOCAL_TOKEN or localhost).
     """
-    _SSE_INTERVAL = 5  # seconds between pushes
+    _SSE_INTERVAL = 5  # seconds between checks
+    _last_hash = ""
 
     async def _event_generator():
+        nonlocal _last_hash
         while True:
             if await request.is_disconnected():
                 break
             try:
                 _require_db()
-                # Latest signals (last 24 h, up to 30 records)
                 signal_rows = query_all(
                     """
                     SELECT DISTINCT ON (signal_name)
@@ -683,7 +685,6 @@ async def api_stream(request: Request):
                     """,
                     (datetime.now(timezone.utc) - timedelta(hours=24),),
                 )
-                # Latest price per tracked ticker
                 price_rows = query_all(
                     """
                     SELECT DISTINCT ON (ticker) ticker, price, ts
@@ -691,29 +692,34 @@ async def api_stream(request: Request):
                     ORDER BY ticker, ts DESC;
                     """
                 )
-                payload = json.dumps(
-                    {
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "signals": [
-                            {
-                                "name": str(r.get("signal_name") or ""),
-                                "direction": str(r.get("direction") or ""),
-                                "confidence": float(r.get("confidence") or 0.0),
-                                "ts": r["ts"].isoformat() if r.get("ts") else "",
-                            }
-                            for r in signal_rows
-                        ],
-                        "prices": [
-                            {
-                                "ticker": str(r.get("ticker") or ""),
-                                "price": float(r.get("price") or 0.0),
-                                "ts": r["ts"].isoformat() if r.get("ts") else "",
-                            }
-                            for r in price_rows
-                        ],
-                    }
-                )
-                yield f"data: {payload}\n\n"
+                # Build data payload (without volatile wallclock ts) for hashing
+                data = {
+                    "signals": [
+                        {
+                            "name": str(r.get("signal_name") or ""),
+                            "direction": str(r.get("direction") or ""),
+                            "confidence": float(r.get("confidence") or 0.0),
+                            "ts": r["ts"].isoformat() if r.get("ts") else "",
+                        }
+                        for r in signal_rows
+                    ],
+                    "prices": [
+                        {
+                            "ticker": str(r.get("ticker") or ""),
+                            "price": float(r.get("price") or 0.0),
+                            "ts": r["ts"].isoformat() if r.get("ts") else "",
+                        }
+                        for r in price_rows
+                    ],
+                }
+                data_hash = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+                if data_hash == _last_hash:
+                    # Data unchanged — send a lightweight keepalive comment instead
+                    yield ": keepalive\n\n"
+                else:
+                    _last_hash = data_hash
+                    data["ts"] = datetime.now(timezone.utc).isoformat()
+                    yield f"data: {json.dumps(data)}\n\n"
             except Exception as exc:
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
             await asyncio.sleep(_SSE_INTERVAL)
