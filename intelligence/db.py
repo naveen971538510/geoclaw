@@ -241,6 +241,18 @@ def save_memory_snapshot(
                 """,
                 (run_id, win_rate_pct, total_closed, _json.dumps(recent_errors), prompt_suffix),
             )
+            # Retain only the most recent 500 snapshots to prevent unbounded growth
+            # (~17.5 k rows/year at 30-min cycles).
+            cur.execute(
+                """
+                DELETE FROM agent_memory_snapshots
+                WHERE id NOT IN (
+                    SELECT id FROM agent_memory_snapshots
+                    ORDER BY captured_at DESC
+                    LIMIT 500
+                );
+                """
+            )
 
 
 def load_last_memory_snapshot() -> Optional[Dict[str, Any]]:
