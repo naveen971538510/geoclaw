@@ -20,8 +20,9 @@ BLUESKY_SEARCH_URL = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts
 BLUESKY_TIMEOUT = 10
 BLUESKY_MAX_PER_QUERY = 15
 
-# Macro-relevant search terms — kept focused to avoid noise
-_MACRO_QUERIES = [
+# Macro-relevant search terms — kept focused to avoid noise.
+# Override via BLUESKY_QUERIES env var (comma-separated) to tune without a code change.
+_DEFAULT_QUERIES = [
     "federal reserve rate",
     "inflation cpi",
     "oil price opec",
@@ -30,6 +31,8 @@ _MACRO_QUERIES = [
     "gold xau",
     "geopolitics sanctions",
 ]
+_env_queries = os.environ.get("BLUESKY_QUERIES", "").strip()
+_MACRO_QUERIES = [q.strip() for q in _env_queries.split(",") if q.strip()] if _env_queries else _DEFAULT_QUERIES
 
 
 def _fetch_posts(query: str, limit: int = BLUESKY_MAX_PER_QUERY) -> List[Dict[str, Any]]:
