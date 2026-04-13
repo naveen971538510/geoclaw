@@ -4,6 +4,7 @@ GeoClaw dashboard API — FastAPI on port 8001.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import statistics
@@ -17,9 +18,11 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import asyncio
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 try:
@@ -55,6 +58,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/dashboard-app", StaticFiles(directory=str(SPA_DIST_DIR), check_dir=False), name="dashboard_app")
+
+# ---------------------------------------------------------------------------
+# Auth middleware — mirrors _mutation_guard in main.py.
+# Protected paths: /api/* and /bias.  Public: /health, SPA pages, static assets.
+# Set GEOCLAW_LOCAL_TOKEN to enable remote access (Authorization: Bearer <token>).
+# Without the env var the API is restricted to localhost only.
+# ---------------------------------------------------------------------------
+
+# Cached once at module load — changing the token requires a server restart.
+_API_TOKEN = str(os.environ.get("GEOCLAW_LOCAL_TOKEN") or "").strip()
+
+
+def _unauth_response(request: Request) -> JSONResponse:
+    """401 with CORS headers preserved so dev consoles show the real error."""
+    origin = str(request.headers.get("origin") or "")
+    headers: dict[str, str] = {}
+    if origin in _origins:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+    return JSONResponse(
+        {
+            "status": "error",
+            "error": (
+                "Unauthorized — set GEOCLAW_LOCAL_TOKEN and pass it as "
+                "Authorization: Bearer <token> (or ?token=<token>)"
+            ),
+        },
+        status_code=401,
+        headers=headers,
+    )
+
+
+def _is_protected_path(path: str) -> bool:
+    return path.startswith("/api/") or path == "/bias"
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    if request.method != "OPTIONS" and _is_protected_path(request.url.path):
+        client_host = str((request.client.host if request.client else "") or "")
+        is_local = client_host in {"127.0.0.1", "::1", "localhost", "testclient"}
+        if _API_TOKEN:
+            auth_header = str(request.headers.get("authorization") or "")
+            provided = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+            if not provided:
+                provided = str(request.query_params.get("token") or "").strip()
+            if not is_local and not hmac.compare_digest(provided, _API_TOKEN):
+                return _unauth_response(request)
+        elif not is_local:
+            return _unauth_response(request)
+    return await call_next(request)
 
 PRICE_PANEL_META = {
     "BTCUSD": {"label": "BTC", "name": "Bitcoin"},
@@ -600,6 +654,78 @@ def api_checkout_create_session(payload: CheckoutRequest, request: Request):
         )
     except Exception as exc:
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/stream")
+async def api_stream(request: Request):
+    """
+    Server-Sent Events feed — pushes signal and price updates every 5 s.
+    Replaces 30-second setInterval polling; client reconnects automatically on drop.
+    Connect with: const es = new EventSource('/api/stream')
+    Auth: same rules as the rest of /api/* (GEOCLAW_LOCAL_TOKEN or localhost).
+    """
+    _SSE_INTERVAL = 5  # seconds between pushes
+
+    async def _event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                _require_db()
+                # Latest signals (last 24 h, up to 30 records)
+                signal_rows = query_all(
+                    """
+                    SELECT DISTINCT ON (signal_name)
+                        signal_name, direction, confidence, ts
+                    FROM geoclaw_signals
+                    WHERE ts >= %s
+                    ORDER BY signal_name, ts DESC;
+                    """,
+                    (datetime.now(timezone.utc) - timedelta(hours=24),),
+                )
+                # Latest price per tracked ticker
+                price_rows = query_all(
+                    """
+                    SELECT DISTINCT ON (ticker) ticker, price, ts
+                    FROM price_data
+                    ORDER BY ticker, ts DESC;
+                    """
+                )
+                payload = json.dumps(
+                    {
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "signals": [
+                            {
+                                "name": str(r.get("signal_name") or ""),
+                                "direction": str(r.get("direction") or ""),
+                                "confidence": float(r.get("confidence") or 0.0),
+                                "ts": r["ts"].isoformat() if r.get("ts") else "",
+                            }
+                            for r in signal_rows
+                        ],
+                        "prices": [
+                            {
+                                "ticker": str(r.get("ticker") or ""),
+                                "price": float(r.get("price") or 0.0),
+                                "ts": r["ts"].isoformat() if r.get("ts") else "",
+                            }
+                            for r in price_rows
+                        ],
+                    }
+                )
+                yield f"data: {payload}\n\n"
+            except Exception as exc:
+                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            await asyncio.sleep(_SSE_INTERVAL)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+        },
+    )
 
 
 @app.get("/health")
