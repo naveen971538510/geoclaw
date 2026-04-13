@@ -56,6 +56,7 @@ class AlertService:
         self.smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
         self.webhook_url = os.environ.get("ALERT_WEBHOOK_URL", "")
+        self.slack_webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
         self.desktop = os.environ.get("ALERT_DESKTOP", "true").lower() == "true"
 
     def _cooldown_ok(self, alert_name, cooldown_hours):
@@ -238,6 +239,37 @@ class AlertService:
         except Exception as exc:
             logger.error("Email failed: %s", exc)
 
+    def _send_slack(self, title, body):
+        """Send Slack Block Kit message via incoming webhook."""
+        if not self.slack_webhook_url:
+            return
+        try:
+            import urllib.request
+            # Slack Block Kit: header + body section + footer context
+            blocks = [
+                {"type": "header", "text": {"type": "plain_text", "text": f"GeoClaw: {str(title or '')[:150]}", "emoji": True}},
+            ]
+            # Slack has a 3KB per block limit — chunk long bodies
+            body_text = str(body or "")
+            for i in range(0, len(body_text), 2800):
+                chunk = body_text[i : i + 2800]
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+            blocks.append({
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"_GeoClaw Intelligence | {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}_"}],
+            })
+            payload = json.dumps({"blocks": blocks}).encode()
+            req = urllib.request.Request(
+                self.slack_webhook_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
+            logger.info("Slack alert sent: %s", title)
+        except Exception as exc:
+            logger.error("Slack failed: %s", exc)
+
     def _send_webhook(self, title, body):
         if not self.webhook_url:
             return
@@ -266,6 +298,8 @@ class AlertService:
             self._send_email(title, body)
         if self.webhook_url:
             self._send_webhook(title, body)
+        if self.slack_webhook_url:
+            self._send_slack(title, body)
         try:
             from services.telegram_bot import TelegramBot
 
