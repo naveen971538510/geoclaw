@@ -8,7 +8,6 @@ Routing:
 All callers use `?` placeholders; Postgres path transparently converts them to `%s`.
 """
 import os
-import re
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -30,8 +29,35 @@ def _pg_url() -> str:
 
 
 def _to_pg_sql(sql: str) -> str:
-    """Convert SQLite-style `?` placeholders to Postgres `%s`."""
-    return re.sub(r"\?", "%s", sql)
+    """
+    Convert SQLite-style ``?`` placeholders to Postgres ``%s``.
+
+    Only replaces ``?`` that appear *outside* single-quoted string literals so
+    that queries containing literal question marks (URLs, search text, LIKE
+    patterns) are not corrupted.
+    """
+    out: list[str] = []
+    in_quote = False
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "'" and not in_quote:
+            in_quote = True
+            out.append(ch)
+        elif ch == "'" and in_quote:
+            # Handle escaped single-quote ('')
+            if i + 1 < len(sql) and sql[i + 1] == "'":
+                out.append("''")
+                i += 2
+                continue
+            in_quote = False
+            out.append(ch)
+        elif ch == "?" and not in_quote:
+            out.append("%s")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 class _PgConn:
