@@ -1283,6 +1283,71 @@ Phase 3 — Synthesize:
 Today is {date}. Execute the full agentic loop now."""
 
 
+def _build_memory_suffix() -> str:
+    """
+    Pull recent prediction accuracy + source calibration and return a short
+    memory block that is appended to the system prompt each run.
+    The agent uses this to self-correct: it knows which sources are reliable,
+    and whether its past directional calls were correct.
+    """
+    lines: list = []
+    try:
+        from services.prediction_tracker import PredictionTracker
+        tracker = PredictionTracker(str(DB_PATH))
+        report = tracker.get_accuracy_report()
+        verified = int(report.get("verified", 0))
+        refuted  = int(report.get("refuted", 0))
+        neutral  = int(report.get("neutral", 0))
+        total    = verified + refuted + neutral
+        acc      = float(report.get("accuracy_pct", 0.0))
+        if total > 0:
+            lines.append("\n## Your Past Prediction Accuracy")
+            lines.append(
+                f"Out of {total} closed predictions: {verified} correct, "
+                f"{refuted} wrong, {neutral} neutral. "
+                f"Directional win rate: {acc:.1f}%."
+            )
+            if acc < 45:
+                lines.append(
+                    "⚠ Your recent win rate is below 45%. Be more cautious with directional calls — "
+                    "prefer 'neutral/watch' over strong directional signals until accuracy improves."
+                )
+            elif acc >= 65:
+                lines.append(
+                    "✓ Strong recent accuracy. Continue using high-confidence theses to drive signals."
+                )
+            # Surface most recent wrong calls so the agent can learn
+            recent = report.get("recent", [])
+            wrongs = [r for r in recent if str(r.get("outcome", "")) == "refuted"][:3]
+            if wrongs:
+                lines.append("Recent wrong calls (learn from these):")
+                for w in wrongs:
+                    lines.append(
+                        f"  - {w.get('symbol','?')} predicted {w.get('predicted_direction','?')}, "
+                        f"actual move: {float(w.get('actual_change_pct',0)):.1f}% "
+                        f"({w.get('outcome_note','')})"
+                    )
+    except Exception:
+        pass
+
+    try:
+        from services.calibration_service import get_calibration_report
+        cal = get_calibration_report()
+        items = cal.get("items", {})
+        if items:
+            lines.append("\n## Source Reliability (calibration)")
+            for source, scores in list(items.items())[:5]:
+                for s in scores[:1]:
+                    acc_s = float(s.get("accuracy_pct", 0.0))
+                    n     = int(s.get("n", 0))
+                    if n >= 3:
+                        lines.append(f"  - {source}: {acc_s:.0f}% accurate ({n} samples)")
+    except Exception:
+        pass
+
+    return "\n".join(lines) if lines else ""
+
+
 def _prepare_grounded_snapshot(run_state: Dict[str, Any]) -> Dict[str, Any]:
     tool_state: Dict[str, Any] = {}
     tool_state["get_price_data"] = tool_get_price_data(run_state=run_state)
@@ -1354,8 +1419,10 @@ def run_agent_loop() -> None:
     _CURRENT_RUN_STATE = run_state
     logger.info("GeoClaw Agent Brain starting agentic loop run_id=%s", run_state["run_id"])
     date_str = datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
+    memory_suffix = _build_memory_suffix()
+    system_content = SYSTEM_PROMPT.format(date=date_str) + memory_suffix
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(date=date_str)},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": (
             "Run the full GeoClaw agentic intelligence loop now.\n\n"
             "Step 1: Gather baseline — run signal engine, fetch prices, macro, signals, and active theses.\n"
