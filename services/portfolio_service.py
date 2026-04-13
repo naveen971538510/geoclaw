@@ -1,6 +1,9 @@
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
+
+logger = logging.getLogger("geoclaw.portfolio")
 
 
 class PortfolioService:
@@ -198,3 +201,185 @@ class PortfolioService:
         conn.close()
         threats.sort(key=lambda item: float(item.get("threat_confidence", 0.0) or 0.0), reverse=True)
         return threats
+
+    # ── Thesis → Position Sizing ────────────────────────────────────────
+
+    _DIRECTION_KEYWORDS = {
+        "long": ["bullish", "buy", "long", "upside", "rally", "surge", "rise", "support"],
+        "short": ["bearish", "sell", "short", "downside", "fall", "drop", "decline", "pressure"],
+    }
+
+    @staticmethod
+    def _thesis_direction(thesis: dict) -> str:
+        """Infer long/short from thesis key text."""
+        text = (str(thesis.get("thesis_key", "") or "")).lower()
+        long_hits = sum(1 for w in PortfolioService._DIRECTION_KEYWORDS["long"] if w in text)
+        short_hits = sum(1 for w in PortfolioService._DIRECTION_KEYWORDS["short"] if w in text)
+        return "short" if short_hits > long_hits else "long"
+
+    @staticmethod
+    def _thesis_symbol(thesis: dict) -> str:
+        """Best-effort symbol extraction from thesis key."""
+        suggestion = str(thesis.get("watchlist_suggestion") or "").strip().upper()
+        if suggestion and 1 <= len(suggestion) <= 6 and suggestion.isalpha():
+            return suggestion
+        text = (str(thesis.get("thesis_key") or "")).upper()
+        # common asset keywords → symbols
+        MAP = {
+            "GOLD": "GLD", "OIL": "USO", "CRUDE": "USO",
+            "S&P": "SPY", "S&P500": "SPY", "NASDAQ": "QQQ",
+            "BITCOIN": "BTC-USD", "CRYPTO": "BTC-USD",
+            "DOLLAR": "UUP", "USD": "UUP",
+            "BONDS": "TLT", "TREASURY": "TLT",
+            "COPPER": "CPER", "SILVER": "SLV",
+        }
+        for kw, sym in MAP.items():
+            if kw in text:
+                return sym
+        return "MULTI"
+
+    @staticmethod
+    def _size_from_confidence(confidence: float, max_risk_pct: float = 5.0) -> float:
+        """
+        Kelly-lite sizing: allocate 0–max_risk_pct of portfolio based on confidence.
+        confidence=0.65 → ~1.5%,  confidence=0.80 → ~3.5%,  confidence=0.95 → max_risk_pct
+        Formula: allocation = max_risk_pct * ((confidence - 0.65) / 0.35) ** 0.7
+        """
+        conf = max(0.65, min(1.0, float(confidence or 0)))
+        raw = max_risk_pct * ((conf - 0.65) / 0.35) ** 0.7
+        return round(min(raw, max_risk_pct), 2)
+
+    def suggest_from_thesis(self, thesis: dict, portfolio_value: float = 100_000.0,
+                            max_risk_pct: float = 5.0) -> dict:
+        """
+        Compute a position suggestion from a single thesis.
+        Does NOT write to DB — returns a suggestion dict for the caller to approve.
+        """
+        confidence = float(thesis.get("confidence") or 0)
+        if confidence < 0.65:
+            return {}
+        symbol = self._thesis_symbol(thesis)
+        direction = self._thesis_direction(thesis)
+        alloc_pct = self._size_from_confidence(confidence, max_risk_pct)
+        alloc_usd = round(portfolio_value * alloc_pct / 100, 2)
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "confidence": round(confidence * 100, 1),
+            "alloc_pct": alloc_pct,
+            "alloc_usd": alloc_usd,
+            "thesis_key": str(thesis.get("thesis_key") or "")[:200],
+            "terminal_risk": str(thesis.get("terminal_risk") or "MEDIUM"),
+            "suggested_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def apply_thesis_signals(self, theses: list, portfolio_value: float = 100_000.0,
+                             min_confidence: float = 0.70, max_risk_pct: float = 5.0,
+                             dry_run: bool = True) -> dict:
+        """
+        Process high-confidence theses and either suggest or record positions.
+
+        Args:
+            theses: list of thesis dicts from thesis_service
+            portfolio_value: total portfolio size in USD (used for sizing)
+            min_confidence: minimum confidence to consider (default 70%)
+            max_risk_pct: maximum allocation per thesis as % of portfolio (default 5%)
+            dry_run: if True, returns suggestions without writing to DB.
+                     if False, records suggestions to portfolio_signals table.
+
+        Returns:
+            dict with 'suggestions' list and 'applied' count
+        """
+        eligible = [t for t in (theses or []) if float(t.get("confidence") or 0) >= min_confidence
+                    and str(t.get("status") or "active").lower() not in ("superseded", "stale")]
+        suggestions = []
+        for thesis in eligible:
+            suggestion = self.suggest_from_thesis(thesis, portfolio_value, max_risk_pct)
+            if suggestion:
+                suggestions.append(suggestion)
+
+        applied = 0
+        if not dry_run and suggestions:
+            applied = self._record_signals(suggestions)
+
+        total_alloc_pct = round(sum(s.get("alloc_pct", 0) for s in suggestions), 2)
+        logger.info("apply_thesis_signals: %d eligible, %d suggestions, %.1f%% total alloc",
+                    len(eligible), len(suggestions), total_alloc_pct)
+        return {
+            "eligible_theses": len(eligible),
+            "suggestions": suggestions,
+            "total_alloc_pct": total_alloc_pct,
+            "total_alloc_usd": round(portfolio_value * total_alloc_pct / 100, 2),
+            "applied": applied,
+            "dry_run": dry_run,
+        }
+
+    def _record_signals(self, suggestions: list) -> int:
+        """Persist position signals to portfolio_signals table (created if missing)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    direction TEXT,
+                    confidence REAL,
+                    alloc_pct REAL,
+                    alloc_usd REAL,
+                    thesis_key TEXT,
+                    terminal_risk TEXT,
+                    status TEXT DEFAULT 'pending',
+                    suggested_at TEXT,
+                    actioned_at TEXT
+                )
+            """)
+            now = datetime.now(timezone.utc).isoformat()
+            count = 0
+            for s in suggestions:
+                # Skip if a pending signal for same symbol+direction already exists
+                existing = conn.execute(
+                    "SELECT id FROM portfolio_signals WHERE symbol=? AND direction=? AND status='pending' LIMIT 1",
+                    (s.get("symbol", ""), s.get("direction", "long"))
+                ).fetchone()
+                if existing:
+                    continue
+                conn.execute("""
+                    INSERT INTO portfolio_signals
+                        (symbol, direction, confidence, alloc_pct, alloc_usd,
+                         thesis_key, terminal_risk, suggested_at)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (
+                    s.get("symbol", ""), s.get("direction", "long"),
+                    s.get("confidence", 0), s.get("alloc_pct", 0), s.get("alloc_usd", 0),
+                    s.get("thesis_key", "")[:300], s.get("terminal_risk", "MEDIUM"), now,
+                ))
+                count += 1
+            conn.commit()
+            conn.close()
+            return count
+        except Exception as exc:
+            logger.error("_record_signals failed: %s", exc)
+            return 0
+
+    def get_pending_signals(self) -> list:
+        """Return all pending position signals for operator review."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT, direction TEXT, confidence REAL, alloc_pct REAL,
+                    alloc_usd REAL, thesis_key TEXT, terminal_risk TEXT,
+                    status TEXT DEFAULT 'pending', suggested_at TEXT, actioned_at TEXT
+                )
+            """)
+            rows = conn.execute(
+                "SELECT * FROM portfolio_signals WHERE status='pending' ORDER BY confidence DESC, suggested_at DESC"
+            ).fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception as exc:
+            logger.error("get_pending_signals: %s", exc)
+            return []

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
@@ -37,9 +38,34 @@ def _agent_job():
         }
         _last_error = ""
         logger.info("agent_cycle_job complete: %s", _last_agent_result)
+
+        # Apply thesis signals to portfolio after every agent run
+        _apply_portfolio_signals()
     except Exception as exc:
         _last_error = str(exc)
         logger.warning("agent_cycle_job failed: %s", exc, exc_info=True)
+
+
+def _apply_portfolio_signals():
+    """Pull high-confidence theses and write position signals to portfolio_signals table."""
+    try:
+        from services.portfolio_service import PortfolioService
+        from services.thesis_service import ThesisService
+        svc = ThesisService(str(DB_PATH))
+        theses = svc.get_theses(status="active", limit=50)
+        portfolio = PortfolioService(str(DB_PATH))
+        result = portfolio.apply_thesis_signals(
+            theses,
+            portfolio_value=float(os.environ.get("PORTFOLIO_VALUE_USD", "100000")),
+            min_confidence=0.70,
+            max_risk_pct=5.0,
+            dry_run=False,
+        )
+        if result.get("applied", 0):
+            logger.info("Portfolio signals recorded: %s new signals, %.1f%% total alloc",
+                        result["applied"], result.get("total_alloc_pct", 0))
+    except Exception as exc:
+        logger.warning("_apply_portfolio_signals failed: %s", exc)
 
 
 def _market_job():

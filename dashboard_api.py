@@ -769,6 +769,48 @@ def agent_investigations():
         return JSONResponse({"status": "error", "error": str(exc), "investigations": []})
 
 
+@app.get("/api/portfolio/signals")
+def portfolio_signals():
+    """Pending position signals generated from high-confidence theses."""
+    try:
+        from services.portfolio_service import PortfolioService
+        portfolio = PortfolioService(str(DB_PATH))
+        signals = portfolio.get_pending_signals()
+        total_alloc = round(sum(float(s.get("alloc_pct", 0)) for s in signals), 2)
+        return JSONResponse({
+            "status": "ok",
+            "signals": signals,
+            "count": len(signals),
+            "total_alloc_pct": total_alloc,
+        })
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "signals": []})
+
+
+@app.post("/api/portfolio/signals/{signal_id}/action")
+def portfolio_signal_action(signal_id: int, body: dict):
+    """
+    Mark a signal as actioned (approved/rejected).
+    Body: {"action": "approved" | "rejected"}
+    """
+    try:
+        import sqlite3
+        action = str(body.get("action", "approved")).lower()
+        if action not in ("approved", "rejected"):
+            return JSONResponse({"status": "error", "error": "action must be 'approved' or 'rejected'"}, status_code=400)
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            "UPDATE portfolio_signals SET status=?, actioned_at=? WHERE id=?",
+            (action, datetime.utcnow().isoformat(), signal_id)
+        )
+        conn.commit()
+        conn.close()
+        return JSONResponse({"status": "ok", "signal_id": signal_id, "action": action})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "geoclaw-dashboard"}
