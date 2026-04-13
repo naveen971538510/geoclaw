@@ -190,7 +190,65 @@ def ensure_intelligence_schema() -> None:
             END$$;
             """
         )
+        # Agent memory snapshots — persists what the agent "believed" at each cycle
+        # so restarts don't reset calibration and the backtester can correlate
+        # accuracy improvements to specific memory states.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_memory_snapshots (
+                id SERIAL PRIMARY KEY,
+                run_id VARCHAR(32) NOT NULL,
+                captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                win_rate_pct DOUBLE PRECISION,
+                total_closed INTEGER,
+                recent_errors JSONB DEFAULT '[]'::jsonb,
+                prompt_suffix TEXT NOT NULL,
+                UNIQUE (run_id)
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_memory_snapshots_captured
+            ON agent_memory_snapshots (captured_at DESC);
+            """
+        )
         cur.close()
+
+
+def save_memory_snapshot(
+    run_id: str,
+    win_rate_pct: Optional[float],
+    total_closed: int,
+    recent_errors: List[Dict[str, Any]],
+    prompt_suffix: str,
+) -> None:
+    """Persist the calibration block the agent saw at this cycle."""
+    import json as _json
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO agent_memory_snapshots
+                    (run_id, win_rate_pct, total_closed, recent_errors, prompt_suffix)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (run_id) DO UPDATE
+                    SET win_rate_pct  = EXCLUDED.win_rate_pct,
+                        total_closed  = EXCLUDED.total_closed,
+                        recent_errors = EXCLUDED.recent_errors,
+                        prompt_suffix = EXCLUDED.prompt_suffix,
+                        captured_at   = NOW();
+                """,
+                (run_id, win_rate_pct, total_closed, _json.dumps(recent_errors), prompt_suffix),
+            )
+
+
+def load_last_memory_snapshot() -> Optional[Dict[str, Any]]:
+    """Return the most recent snapshot or None if the table is empty."""
+    rows = query_all(
+        "SELECT * FROM agent_memory_snapshots ORDER BY captured_at DESC LIMIT 1;"
+    )
+    return rows[0] if rows else None
 
 
 def query_all(sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:

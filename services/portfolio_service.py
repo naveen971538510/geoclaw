@@ -1,11 +1,39 @@
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
+
+# Gross exposure caps — total open allocation must stay within these bounds.
+# Prevents a cluster of high-confidence signals from creating dangerous concentration.
+GROSS_EXPOSURE_CAP_PCT = float(os.environ.get("GEOCLAW_GROSS_EXPOSURE_CAP_PCT") or "12.0")
+PER_POSITION_CAP_PCT = float(os.environ.get("GEOCLAW_PER_POSITION_CAP_PCT") or "5.0")
+PORTFOLIO_VALUE_USD = float(os.environ.get("PORTFOLIO_VALUE_USD") or "100000")
 
 
 class PortfolioService:
     def __init__(self, db_path):
         self.db_path = db_path
+
+    def get_gross_exposure(self, portfolio_value_usd: float = PORTFOLIO_VALUE_USD) -> dict:
+        """
+        Return gross exposure as a percentage of portfolio_value_usd.
+        Gross exposure = sum of abs(position cost) for all open positions.
+        """
+        positions = self.get_positions("open")
+        if not positions:
+            return {"gross_exposure_pct": 0.0, "gross_exposure_usd": 0.0, "position_count": 0}
+        total_cost = sum(
+            abs(float(pos.get("entry_price") or 0.0) * float(pos.get("quantity") or 0.0))
+            for pos in positions
+        )
+        gross_pct = (total_cost / portfolio_value_usd * 100.0) if portfolio_value_usd else 0.0
+        return {
+            "gross_exposure_pct": round(gross_pct, 2),
+            "gross_exposure_usd": round(total_cost, 2),
+            "position_count": len(positions),
+            "cap_pct": GROSS_EXPOSURE_CAP_PCT,
+            "headroom_pct": round(max(0.0, GROSS_EXPOSURE_CAP_PCT - gross_pct), 2),
+        }
 
     def add_position(
         self,
@@ -18,7 +46,25 @@ class PortfolioService:
         currency="USD",
         notes="",
         tags=None,
+        portfolio_value_usd: float = PORTFOLIO_VALUE_USD,
     ) -> int:
+        # Enforce per-position and gross exposure caps before writing
+        position_cost = abs(float(entry_price or 0.0) * float(quantity or 0.0))
+        position_alloc_pct = (position_cost / portfolio_value_usd * 100.0) if portfolio_value_usd else 0.0
+        if position_alloc_pct > PER_POSITION_CAP_PCT:
+            raise ValueError(
+                f"Position allocation {position_alloc_pct:.1f}% exceeds per-position cap "
+                f"of {PER_POSITION_CAP_PCT:.1f}%. Reduce size or raise GEOCLAW_PER_POSITION_CAP_PCT."
+            )
+        exposure = self.get_gross_exposure(portfolio_value_usd)
+        projected_gross = float(exposure["gross_exposure_pct"]) + position_alloc_pct
+        if projected_gross > GROSS_EXPOSURE_CAP_PCT:
+            raise ValueError(
+                f"Adding this position would push gross exposure to {projected_gross:.1f}%, "
+                f"exceeding the {GROSS_EXPOSURE_CAP_PCT:.1f}% cap. "
+                f"Available headroom: {exposure['headroom_pct']:.1f}%."
+            )
+
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         now = datetime.now(timezone.utc).isoformat()

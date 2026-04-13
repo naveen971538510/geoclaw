@@ -44,6 +44,8 @@ from config import (
     ENV_FILE,
 )
 
+from intelligence.db import save_memory_snapshot
+
 _load_local_env(ENV_FILE)
 
 from briefing_formatter import build_briefing
@@ -1092,6 +1094,77 @@ def call_groq(messages: List[Dict], tools: Optional[List] = None) -> Dict:
 
 
 # ─────────────────────────────────────────────
+# SELF-CALIBRATION MEMORY
+# ─────────────────────────────────────────────
+
+def _build_memory_suffix(run_id: str) -> str:
+    """
+    Build a self-calibration block from the prediction tracker and save it as a
+    snapshot so restarts don't reset learning. Returns empty string on any error.
+    """
+    try:
+        from services.prediction_tracker import PredictionTracker
+        tracker = PredictionTracker(str(DB_PATH))
+        report = tracker.get_accuracy_report()
+
+        win_rate = float(report.get("accuracy_pct") or 0.0)
+        total_closed = int(report.get("verified", 0)) + int(report.get("refuted", 0))
+        recent = report.get("recent") or []
+
+        # Only inject calibration after the agent has real data to learn from
+        if total_closed < 3:
+            return ""
+
+        # Directional tone based on win rate
+        if win_rate < 45:
+            tone = "Your recent accuracy is below 45%. Be more cautious — prefer NEUTRAL or HOLD signals when evidence is weak."
+        elif win_rate >= 65:
+            tone = "Your recent accuracy is above 65%. Strong track record — continue high-confidence directional calls when evidence is clear."
+        else:
+            tone = "Your recent accuracy is in the 45-65% range. Maintain balanced confidence — only go directional on strong evidence."
+
+        # Collect recent wrong calls (refuted predictions)
+        wrong_calls = [
+            {
+                "symbol": str(r.get("symbol") or ""),
+                "direction": str(r.get("predicted_direction") or ""),
+                "actual_change_pct": round(float(r.get("actual_change_pct") or 0.0), 2),
+            }
+            for r in recent
+            if str(r.get("outcome") or "") == "refuted"
+        ][:3]
+
+        wrong_lines = "\n".join(
+            f"  - {w['symbol']} predicted {w['direction']} but moved {w['actual_change_pct']:+.1f}%"
+            for w in wrong_calls
+        ) if wrong_calls else "  (none recently)"
+
+        suffix = (
+            f"\n\n--- SELF-CALIBRATION MEMORY (do not ignore) ---\n"
+            f"Prediction accuracy: {win_rate:.1f}% ({total_closed} closed calls)\n"
+            f"{tone}\n"
+            f"Recent wrong calls:\n{wrong_lines}\n"
+            f"--- END MEMORY ---"
+        )
+
+        # Persist snapshot so restarts retain learning and the backtester can audit
+        try:
+            save_memory_snapshot(
+                run_id=run_id,
+                win_rate_pct=win_rate,
+                total_closed=total_closed,
+                recent_errors=wrong_calls,
+                prompt_suffix=suffix,
+            )
+        except Exception:
+            pass  # snapshot persistence is best-effort — never block a run
+
+        return suffix
+    except Exception:
+        return ""
+
+
+# ─────────────────────────────────────────────
 # AGENTIC LOOP
 # ─────────────────────────────────────────────
 
@@ -1156,8 +1229,9 @@ def run_agent_loop() -> None:
     _CURRENT_RUN_STATE = run_state
     logger.info("GeoClaw Agent Brain starting agentic loop run_id=%s", run_state["run_id"])
     date_str = datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
+    memory_suffix = _build_memory_suffix(run_state["run_id"])
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(date=date_str)},
+        {"role": "system", "content": SYSTEM_PROMPT.format(date=date_str) + memory_suffix},
         {"role": "user", "content": "Run the full GeoClaw morning intelligence briefing loop now."},
     ]
 
