@@ -17,7 +17,9 @@ _last_briefing_run_at = ""
 _last_agent_result = {}
 _last_briefing_result = {}
 _last_error = ""
+_last_prices = {}
 _interval_minutes = int(SCHEDULER_INTERVAL_MINUTES or 30)
+PRICE_SPIKE_THRESHOLD_PCT = 2.0
 logger = get_logger("scheduler")
 
 
@@ -41,14 +43,54 @@ def _agent_job():
 
 
 def _market_job():
-    global _last_market_run_at, _last_error
+    global _last_market_run_at, _last_error, _last_prices
     try:
         result = fetch_and_store_market_snapshots()
         _last_market_run_at = datetime.now(timezone.utc).isoformat()
         logger.info("market_snapshot_job complete: %s", result)
+
+        _detect_price_spikes()
     except Exception as exc:
         _last_error = str(exc)
         logger.warning("market_snapshot_job failed: %s", exc, exc_info=True)
+
+
+def _detect_price_spikes():
+    global _last_prices
+    try:
+        from services.price_feed import PriceFeed
+        feed = PriceFeed()
+        snapshot = feed.get_snapshot()
+        if not snapshot:
+            return
+
+        for symbol, data in snapshot.items():
+            price = data.get("price")
+            prev_price = _last_prices.get(symbol)
+            if price is None or prev_price is None:
+                if price is not None:
+                    _last_prices[symbol] = price
+                continue
+
+            if prev_price > 0:
+                pct_change = ((price - prev_price) / prev_price) * 100
+                if abs(pct_change) >= PRICE_SPIKE_THRESHOLD_PCT:
+                    from services.event_bus import publish
+                    publish("price_spike", {
+                        "ticker": symbol,
+                        "symbol": symbol,
+                        "name": data.get("name", symbol),
+                        "price": price,
+                        "previous_price": prev_price,
+                        "pct_change": round(pct_change, 2),
+                        "direction": "up" if pct_change > 0 else "down",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    logger.info("Price spike detected: %s %.2f%% (%s -> %s)", symbol, pct_change, prev_price, price)
+
+            _last_prices[symbol] = price
+    except Exception as exc:
+        logger.debug("Price spike detection error: %s", exc)
 
 
 def _briefing_job(audience: str = "trader", deliver: bool = False):
@@ -92,6 +134,21 @@ def _executive_briefing_job():
 
 def _trader_briefing_job():
     _briefing_job(audience="trader", deliver=False)
+
+
+def _prediction_check_job():
+    """Periodically check pending predictions against actual prices."""
+    try:
+        from services.prediction_tracker import PredictionTracker
+        from services.event_bus import publish
+        tracker = PredictionTracker(str(DB_PATH))
+        results = tracker.check_pending_predictions()
+        if results.get("checked", 0) > 0:
+            logger.info("Prediction check: %s", results)
+            if results.get("verified", 0) > 0 or results.get("refuted", 0) > 0:
+                publish("prediction_checked", results)
+    except Exception as exc:
+        logger.debug("Prediction check failed: %s", exc)
 
 
 def _build_scheduler(interval_minutes: int) -> BackgroundScheduler:
@@ -140,6 +197,17 @@ def _build_scheduler(interval_minutes: int) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+
+    sched.add_job(
+        _prediction_check_job,
+        trigger="interval",
+        hours=6,
+        id="geoclaw_prediction_check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
     return sched
 
 
@@ -155,7 +223,15 @@ def start_scheduler(interval_minutes: int = None):
         sched.start()
         _scheduler = sched
         logger.info("scheduler started at %s with interval=%s minutes", datetime.now(timezone.utc).isoformat(), _interval_minutes)
-        return True
+
+    try:
+        from services.reactive_agent import start_reactive_agent
+        start_reactive_agent()
+        logger.info("Reactive agent started alongside scheduler")
+    except Exception as exc:
+        logger.warning("Could not start reactive agent: %s", exc)
+
+    return True
 
 
 def ensure_scheduler_started(interval_minutes: int = None):
@@ -169,6 +245,11 @@ def ensure_scheduler_started(interval_minutes: int = None):
 
 def stop_scheduler():
     global _scheduler
+    try:
+        from services.reactive_agent import stop_reactive_agent
+        stop_reactive_agent()
+    except Exception:
+        pass
     with _lock:
         if _scheduler is None:
             return False
@@ -194,6 +275,13 @@ def get_scheduler_status():
                 }
             )
 
+    reactive_status = {}
+    try:
+        from services.reactive_agent import get_reactive_agent
+        reactive_status = get_reactive_agent().get_status()
+    except Exception:
+        reactive_status = {"running": False}
+
     return {
         "running": bool(sched.running) if sched is not None else False,
         "job_count": len(jobs),
@@ -205,6 +293,7 @@ def get_scheduler_status():
         "last_agent_result": _last_agent_result,
         "last_briefing_result": _last_briefing_result,
         "last_error": _last_error,
+        "reactive_agent": reactive_status,
     }
 
 

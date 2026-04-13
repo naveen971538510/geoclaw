@@ -49,7 +49,7 @@ _load_local_env(ENV_FILE)
 from briefing_formatter import build_briefing
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 STATUS_FILE = ROOT / "logs" / "agent_brain.status.json"
 STATUS_HTML_FILE = ROOT / "logs" / "agent_brain.status.html"
@@ -130,6 +130,89 @@ TOOLS = [
             "name": "assess_market_bias",
             "description": "Analyse current signals and prices to determine overall market bias (BULLISH/BEARISH/NEUTRAL) with reasoning.",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current information on a topic. Use this to investigate breaking news, verify thesis claims, or find fresh data the RSS feeds haven't picked up yet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g. 'OPEC production cut latest', 'Fed rate decision impact')",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results to return (default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_breaking_news",
+            "description": "Fetch breaking news on a specific topic. Use when a signal or price spike needs immediate context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Topic to search for breaking news (e.g. 'gold price surge', 'US-China tariffs')",
+                    },
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "research_thesis",
+            "description": "Deep-dive research on a specific thesis. Searches local DB and live sources for supporting or contradicting evidence, then updates thesis confidence.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thesis_key": {
+                        "type": "string",
+                        "description": "Short key for the thesis (e.g. 'oil supply disruption')",
+                    },
+                    "current_claim": {
+                        "type": "string",
+                        "description": "The full thesis claim to research",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category: markets, geopolitics, energy, macro, etc.",
+                        "default": "markets",
+                    },
+                },
+                "required": ["thesis_key", "current_claim"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_active_theses",
+            "description": "Get current active theses the agent is tracking, with confidence scores and status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max theses to return (default 10)",
+                        "default": 10,
+                    },
+                },
+                "required": [],
+            },
         },
     },
 ]
@@ -1027,68 +1110,133 @@ def _send_telegram_and_record(
     return send_result
 
 
+def tool_web_search(query: str, max_results: int = 5, run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    try:
+        from services.web_searcher import WebSearcher
+        searcher = WebSearcher(db_path=str(DB_PATH))
+        result = searcher.search_with_details(
+            query, max_results=max_results, triggered_by="agent_brain"
+        )
+        articles = result.get("results", [])
+        return {
+            "query": query,
+            "results_found": len(articles),
+            "articles": [
+                {
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "body": a.get("body", "")[:500],
+                    "source": a.get("source", ""),
+                }
+                for a in articles
+            ],
+        }
+    except Exception as e:
+        _mark_degraded(run_state, "web_search_error", str(e))
+        return {"error": str(e), "query": query, "results_found": 0, "articles": []}
+
+
+def tool_fetch_breaking_news(topic: str, run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    try:
+        from services.web_searcher import WebSearcher
+        searcher = WebSearcher(db_path=str(DB_PATH))
+        result = searcher.search_breaking_news(topic)
+        articles = result.get("results", [])
+        return {
+            "topic": topic,
+            "results_found": len(articles),
+            "articles": [
+                {
+                    "title": a.get("title", ""),
+                    "url": a.get("url", ""),
+                    "body": a.get("body", "")[:500],
+                    "source": a.get("source", ""),
+                }
+                for a in articles
+            ],
+        }
+    except Exception as e:
+        _mark_degraded(run_state, "breaking_news_error", str(e))
+        return {"error": str(e), "topic": topic, "results_found": 0, "articles": []}
+
+
+def tool_research_thesis_deep(thesis_key: str, current_claim: str, category: str = "markets", run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    try:
+        from services.research_agent import research_thesis
+        result = research_thesis(thesis_key, current_claim, category)
+        return result
+    except Exception as e:
+        _mark_degraded(run_state, "research_thesis_error", str(e))
+        return {"error": str(e), "status": "failed"}
+
+
+def tool_get_active_theses(limit: int = 10, run_state: Optional[Dict[str, Any]] = None) -> Dict:
+    run_state = _run_state_for_tool(run_state)
+    try:
+        from services.thesis_service import list_theses
+        theses = list_theses(limit=limit)
+        return {
+            "theses": [
+                {
+                    "thesis_key": t.get("thesis_key", ""),
+                    "current_claim": t.get("current_claim", ""),
+                    "confidence": t.get("confidence", 0.0),
+                    "status": t.get("status", ""),
+                    "evidence_count": t.get("evidence_count", 0),
+                    "category": t.get("category", ""),
+                    "last_update_reason": t.get("last_update_reason", ""),
+                }
+                for t in theses
+            ],
+            "count": len(theses),
+        }
+    except Exception as e:
+        _mark_degraded(run_state, "theses_error", str(e))
+        return {"error": str(e), "theses": [], "count": 0}
+
+
 TOOL_MAP = {
     "get_latest_signals": lambda args: tool_get_latest_signals(run_state=_CURRENT_RUN_STATE, **args),
     "run_signal_engine": lambda args: tool_run_signal_engine(run_state=_CURRENT_RUN_STATE),
     "get_price_data": lambda args: tool_get_price_data(run_state=_CURRENT_RUN_STATE),
     "get_macro_metrics": lambda args: tool_get_macro_metrics(run_state=_CURRENT_RUN_STATE),
     "assess_market_bias": lambda args: tool_assess_market_bias(run_state=_CURRENT_RUN_STATE),
+    "web_search": lambda args: tool_web_search(run_state=_CURRENT_RUN_STATE, **args),
+    "fetch_breaking_news": lambda args: tool_fetch_breaking_news(run_state=_CURRENT_RUN_STATE, **args),
+    "research_thesis": lambda args: tool_research_thesis_deep(run_state=_CURRENT_RUN_STATE, **args),
+    "get_active_theses": lambda args: tool_get_active_theses(run_state=_CURRENT_RUN_STATE, **args),
 }
 
 
 # ─────────────────────────────────────────────
-# GROQ CALLER
+# LLM CALLER (multi-provider with failover)
 # ─────────────────────────────────────────────
 
 def call_groq(messages: List[Dict], tools: Optional[List] = None) -> Dict:
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY not set in .env.geoclaw")
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": messages,
-        "max_tokens": 1024,
-        "temperature": 0.3,
-    }
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+    """Call the LLM via the multi-provider router (Groq → OpenAI → Gemini)."""
+    from services.llm_router import get_llm_router
 
-    last_error = None
-    retry_count = 0
-    for attempt in range(3):
-        resp = requests.post(
-            GROQ_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
-        if resp.status_code == 429:
-            retry_count += 1
-            if _CURRENT_RUN_STATE is not None:
-                _CURRENT_RUN_STATE["groq_result"] = {
-                    "status": "retrying" if attempt < 2 else "exhausted",
-                    "retry_count": retry_count,
-                    "last_status_code": 429,
-                }
-            last_error = requests.HTTPError(
-                f"429 Client Error: Too Many Requests for url: {GROQ_URL}"
-            )
-            if attempt < 2:
-                wait_seconds = 15 * (attempt + 1)
-                logger.warning(
-                    f"Groq rate limited (attempt {attempt + 1}/3). Sleeping {wait_seconds}s before retry."
-                )
-                time.sleep(wait_seconds)
-                continue
-        resp.raise_for_status()
-        return resp.json()
-
-    if last_error:
-        raise last_error
-    raise RuntimeError("Groq request failed without a JSON response")
+    router = get_llm_router()
+    try:
+        result = router.call(messages, tools=tools, max_tokens=1024, temperature=0.3)
+        if _CURRENT_RUN_STATE is not None:
+            _CURRENT_RUN_STATE["groq_result"] = {
+                "status": "ok",
+                "provider": router._last_provider,
+                "failover_count": router._failover_count,
+            }
+        return result
+    except RuntimeError as exc:
+        if _CURRENT_RUN_STATE is not None:
+            _CURRENT_RUN_STATE["groq_result"] = {
+                "status": "all_providers_failed",
+                "message": str(exc),
+                "provider_status": router.status(),
+            }
+        raise
 
 
 # ─────────────────────────────────────────────
@@ -1097,22 +1245,40 @@ def call_groq(messages: List[Dict], tools: Optional[List] = None) -> Dict:
 
 SYSTEM_PROMPT = """You are GeoClaw Agent Brain — an autonomous macroeconomic intelligence agent.
 
-Your job:
-1. Assess current market conditions using available tools
-2. Run the signal engine to get fresh signals
-3. Analyse signals, prices, and macro data
-4. Determine market bias (BULLISH/BEARISH/NEUTRAL)
-5. Finish after the tool outputs are gathered
-6. Let the runner send the grounded Telegram briefing
+You operate in a THINK → ACT → OBSERVE → REASON loop. Each cycle you:
+1. THINK: What do I know? What do I need to find out?
+2. ACT: Call one or more tools to gather data or investigate.
+3. OBSERVE: Read the tool outputs carefully.
+4. REASON: Does this change my thesis? Do I need to dig deeper?
 
-Rules:
-- Always run the signal engine first, then fetch signals
+Repeat until you have a complete picture, then stop.
+
+## Agentic Workflow
+
+Phase 1 — Gather baseline:
+  - Run the signal engine for fresh signals
+  - Fetch prices, macro metrics, and current signals
+  - Check active theses for anything that needs re-evaluation
+
+Phase 2 — Investigate (this is what makes you agentic):
+  - If a signal is surprising or a price moved sharply, use web_search or fetch_breaking_news to find out WHY
+  - If an active thesis has low confidence, use research_thesis to find supporting or contradicting evidence
+  - If you spot a contradiction between signals and news, dig deeper — do NOT just report it blindly
+  - Chain multiple searches: first search leads to a hypothesis, second search tests it
+
+Phase 3 — Synthesize:
+  - Determine market bias with reasoning
+  - Identify the top 3-5 actionable insights
+  - Note any thesis that was strengthened or weakened by your research
+  - Flag items that need follow-up in the next cycle
+
+## Rules
+- Always gather baseline data first, then investigate anomalies
 - Be concise and direct — traders need fast, clear information
-- Include market bias, top 3-5 directional signals, and one key macro insight
-- Format with Telegram HTML only: <b>bold</b>, <i>italic</i>, newlines with \n not <br>
 - Do not make up data — only use what tools return
-- Do not send Telegram directly; the runner sends a grounded briefing from current-run tool outputs
-- If data is missing or errors occur, say so honestly in the briefing
+- Do not send Telegram directly; the runner sends a grounded briefing
+- If data is missing or errors occur, say so honestly
+- You have up to 15 reasoning steps — use them wisely, don't stop after just gathering data
 
 Today is {date}. Execute the full agentic loop now."""
 
@@ -1127,7 +1293,39 @@ def _prepare_grounded_snapshot(run_state: Dict[str, Any]) -> Dict[str, Any]:
         run_state=run_state,
     )
     tool_state["assess_market_bias"] = tool_assess_market_bias(run_state=run_state)
+
+    # Pre-load active theses for the briefing
+    theses_result = tool_get_active_theses(limit=5, run_state=run_state)
+    run_state["active_theses"] = theses_result.get("theses", [])
+    run_state.setdefault("investigation_findings", [])
+
+    # Auto-record predictions from high-confidence theses
+    _record_predictions_from_theses(theses_result.get("theses", []))
+
     return _attach_run_status(tool_state, run_state)
+
+
+def _record_predictions_from_theses(theses: List[Dict[str, Any]]) -> int:
+    """Record predictions from high-confidence active theses."""
+    recorded = 0
+    try:
+        from services.prediction_tracker import PredictionTracker
+        tracker = PredictionTracker(str(DB_PATH))
+        for thesis in theses:
+            confidence = float(thesis.get("confidence") or 0)
+            if confidence < 0.65:
+                continue
+            key = thesis.get("thesis_key") or ""
+            if not key:
+                continue
+            pred_id = tracker.record_prediction(key, confidence)
+            if pred_id:
+                recorded += 1
+    except Exception as exc:
+        logger.debug("Prediction recording failed: %s", exc)
+    if recorded:
+        logger.info("Recorded %d predictions from active theses", recorded)
+    return recorded
 
 
 def _complete_grounded_tool_state(
@@ -1158,10 +1356,17 @@ def run_agent_loop() -> None:
     date_str = datetime.now(timezone.utc).strftime("%A %d %B %Y, %H:%M UTC")
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(date=date_str)},
-        {"role": "user", "content": "Run the full GeoClaw morning intelligence briefing loop now."},
+        {"role": "user", "content": (
+            "Run the full GeoClaw agentic intelligence loop now.\n\n"
+            "Step 1: Gather baseline — run signal engine, fetch prices, macro, signals, and active theses.\n"
+            "Step 2: Investigate — look at the data. If any signal is surprising, a price moved sharply, "
+            "or a thesis needs verification, use web_search or research_thesis to dig deeper.\n"
+            "Step 3: Synthesize — assess market bias with your full investigation context.\n\n"
+            "Do NOT stop after just gathering data. Investigate at least one anomaly or interesting finding."
+        )},
     ]
 
-    max_iterations = 10
+    max_iterations = 15
     iteration = 0
     tool_state: Dict[str, Any] = _prepare_grounded_snapshot(run_state)
     sent_briefing = False
@@ -1223,6 +1428,19 @@ def run_agent_loop() -> None:
                     if fn_name in TOOL_MAP:
                         result = TOOL_MAP[fn_name](fn_args)
                         tool_state[fn_name] = result
+                        # Capture investigation findings for the briefing
+                        if fn_name in ("web_search", "fetch_breaking_news") and result.get("articles"):
+                            query = result.get("query") or result.get("topic") or ""
+                            count = result.get("results_found", 0)
+                            titles = [a.get("title", "") for a in result.get("articles", [])[:2]]
+                            finding = f"Searched '{query}': {count} results — {'; '.join(titles)}"
+                            run_state.setdefault("investigation_findings", []).append(finding)
+                        elif fn_name == "research_thesis" and result.get("status") == "ok":
+                            key = fn_args.get("thesis_key", "")
+                            support = result.get("support_count", 0)
+                            contradict = result.get("contradict_count", 0)
+                            finding = f"Researched '{key}': {support} supporting, {contradict} contradicting"
+                            run_state.setdefault("investigation_findings", []).append(finding)
                     else:
                         result = {"error": f"Unknown tool: {fn_name}"}
 

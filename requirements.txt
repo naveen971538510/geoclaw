@@ -1,4 +1,4 @@
-# GeoClaw — core + intelligence stack (Tasks 1–7)
+# GeoClaw — core + intelligence stack
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.5.0
@@ -10,3 +10,8 @@ requests>=2.31.0
 apscheduler>=3.10.0
 feedparser>=6.0.0
 google-generativeai>=0.8.0
+httpx>=0.25.0
+openai>=1.0.0
+# Web search and content extraction
+duckduckgo-search>=4.0.0
+trafilatura>=1.6.0

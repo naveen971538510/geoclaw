@@ -602,6 +602,173 @@ def api_checkout_create_session(payload: CheckoutRequest, request: Request):
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
+# ─────────────────────────────────────────────
+# Agentic Intelligence Endpoints
+# ─────────────────────────────────────────────
+
+
+@app.get("/api/agent/reactive/status")
+def reactive_agent_status():
+    """Live status of the reactive investigation agent."""
+    try:
+        from services.reactive_agent import get_reactive_agent
+        agent = get_reactive_agent()
+        return JSONResponse({"status": "ok", **agent.get_status()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "running": False})
+
+
+@app.get("/api/agent/llm/status")
+def llm_router_status():
+    """Status of the multi-provider LLM router (Groq/OpenAI/Gemini)."""
+    try:
+        from services.llm_router import get_llm_router
+        router = get_llm_router()
+        return JSONResponse({"status": "ok", **router.status()})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)})
+
+
+@app.get("/api/events/live")
+def live_events(since: float = 0, limit: int = 50):
+    """Live event feed from the EventBus — polls for new events since a timestamp."""
+    try:
+        from services.event_bus import get_bus
+        bus = get_bus()
+        if since > 0:
+            events = bus.get_recent(since)
+        else:
+            events = bus.get_history(limit=limit)
+        return JSONResponse({
+            "status": "ok",
+            "events": events[-limit:],
+            "count": len(events),
+            "server_time": datetime.now(timezone.utc).timestamp(),
+        })
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "events": []})
+
+
+@app.get("/api/theses/confidence")
+def theses_confidence_chart():
+    """Thesis confidence data formatted for visualization."""
+    try:
+        rows = query_all(
+            """
+            SELECT thesis_key, current_claim, confidence, status,
+                   evidence_count, confidence_velocity, category,
+                   last_update_reason, created_at, last_updated_at
+            FROM agent_theses
+            WHERE COALESCE(status, '') NOT IN ('superseded', 'stale')
+            ORDER BY confidence DESC, evidence_count DESC
+            LIMIT 20;
+            """
+        )
+        theses = []
+        for row in rows:
+            r = dict(row)
+            conf = float(r.get("confidence") or 0)
+            velocity = float(r.get("confidence_velocity") or 0)
+            theses.append({
+                "thesis_key": r.get("thesis_key", ""),
+                "claim": (r.get("current_claim") or r.get("thesis_key") or "")[:120],
+                "confidence_pct": round(conf * 100) if conf <= 1 else round(conf),
+                "velocity": round(velocity, 3),
+                "trend": "rising" if velocity > 0.02 else ("falling" if velocity < -0.02 else "stable"),
+                "status": r.get("status", "active"),
+                "evidence_count": int(r.get("evidence_count") or 0),
+                "category": r.get("category", ""),
+                "last_reason": (r.get("last_update_reason") or "")[:100],
+            })
+        return JSONResponse({"status": "ok", "theses": theses, "count": len(theses)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "theses": []})
+
+
+@app.get("/api/predictions/board")
+def predictions_board():
+    """Prediction scoreboard — tracked predictions with outcomes."""
+    try:
+        rows = query_all(
+            """
+            SELECT thesis_key, predicted_direction, predicted_asset, symbol,
+                   price_at_prediction, confidence_at_prediction, predicted_at,
+                   outcome, outcome_note, actual_change_pct, price_at_check, checked_at
+            FROM thesis_predictions
+            ORDER BY predicted_at DESC
+            LIMIT 30;
+            """
+        )
+        predictions = []
+        stats = {"total": 0, "verified": 0, "refuted": 0, "pending": 0}
+        for row in rows:
+            r = dict(row)
+            outcome = str(r.get("outcome") or "pending").lower()
+            stats["total"] += 1
+            if outcome == "verified":
+                stats["verified"] += 1
+            elif outcome == "refuted":
+                stats["refuted"] += 1
+            else:
+                stats["pending"] += 1
+            predictions.append({
+                "thesis_key": r.get("thesis_key", ""),
+                "direction": r.get("predicted_direction", ""),
+                "asset": r.get("predicted_asset") or r.get("symbol", ""),
+                "entry_price": r.get("price_at_prediction"),
+                "confidence": round(float(r.get("confidence_at_prediction") or 0) * 100),
+                "predicted_at": str(r.get("predicted_at") or ""),
+                "outcome": outcome,
+                "actual_change_pct": r.get("actual_change_pct"),
+                "exit_price": r.get("price_at_check"),
+                "checked_at": str(r.get("checked_at") or ""),
+                "note": (r.get("outcome_note") or "")[:100],
+            })
+        accuracy = round(stats["verified"] / max(stats["verified"] + stats["refuted"], 1) * 100)
+        return JSONResponse({
+            "status": "ok",
+            "predictions": predictions,
+            "stats": {**stats, "accuracy_pct": accuracy},
+        })
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "predictions": [], "stats": {}})
+
+
+@app.get("/api/agent/investigations")
+def agent_investigations():
+    """Recent reactive agent investigation results from the journal."""
+    try:
+        rows = query_all(
+            """
+            SELECT run_id, journal_type, summary, metrics_json, created_at
+            FROM agent_journal
+            WHERE journal_type IN ('research_agent', 'reactive_investigation')
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20;
+            """
+        )
+        investigations = []
+        for row in rows:
+            r = dict(row)
+            metrics = {}
+            try:
+                metrics = json.loads(r.get("metrics_json") or "{}")
+            except Exception:
+                pass
+            investigations.append({
+                "type": r.get("journal_type", ""),
+                "summary": r.get("summary", ""),
+                "created_at": str(r.get("created_at") or ""),
+                "articles_found": metrics.get("articles_found", 0),
+                "support": metrics.get("support", 0),
+                "contradict": metrics.get("contradict", 0),
+                "queries": metrics.get("queries", []),
+            })
+        return JSONResponse({"status": "ok", "investigations": investigations, "count": len(investigations)})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc), "investigations": []})
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "geoclaw-dashboard"}

@@ -93,6 +93,9 @@ ENABLE_RSS = True
 ENABLE_GDELT = True
 ENABLE_NEWSAPI = bool(NEWSAPI_KEY)
 ENABLE_GUARDIAN = bool(GUARDIAN_API_KEY)
+ENABLE_REDDIT = _clean_env("ENABLE_REDDIT").lower() in {"1", "true", "yes", ""}  # on by default
+ENABLE_SEC = _clean_env("ENABLE_SEC").lower() in {"1", "true", "yes", ""}  # on by default
+ENABLE_TWITTER = _clean_env("ENABLE_TWITTER").lower() in {"1", "true", "yes"}  # off by default (needs nitter)
 
 AUTO_NEWS_REFRESH_SECONDS = 600
 AUTO_PRICE_REFRESH_SECONDS = 60

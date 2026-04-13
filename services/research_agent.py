@@ -5,6 +5,7 @@ from typing import Dict, List
 from services.goal_service import ensure_agent_tables, get_conn, utc_now_iso
 from services.llm_service import analyse_custom_json
 from services.thesis_service import record_thesis_event, update_thesis_confidence, upsert_thesis
+from config import ENABLE_REDDIT, ENABLE_SEC
 from sources import RSSSource, GDELTSource
 
 
@@ -44,7 +45,20 @@ def _search_local_articles(query: str, hours: int = 48) -> List[Dict]:
 
 def _search_live_articles(query: str) -> List[Dict]:
     results = []
-    for source in (RSSSource(), GDELTSource()):
+    sources = [RSSSource(), GDELTSource()]
+    if ENABLE_REDDIT:
+        try:
+            from sources import RedditSource
+            sources.append(RedditSource())
+        except Exception:
+            pass
+    if ENABLE_SEC:
+        try:
+            from sources import SECSource
+            sources.append(SECSource())
+        except Exception:
+            pass
+    for source in sources:
         try:
             items = source.fetch(query=query, max_records=4)
         except Exception:

@@ -120,6 +120,13 @@ def _fmt_number(value: Any, decimals: int = 1) -> str:
         return str(value)
 
 
+def _confidence_bar(value: float, width: int = 5) -> str:
+    """Render a text confidence bar like [███░░] for Telegram."""
+    pct = max(0.0, min(100.0, float(value or 0)))
+    filled = round(pct / 100 * width)
+    return "[" + "█" * filled + "░" * (width - filled) + "]"
+
+
 def _pick_macro_insight(metrics: List[Dict[str, Any]]) -> str:
     if not metrics:
         return "No macro metrics available."
@@ -245,54 +252,87 @@ def build_briefing(run_state: Dict[str, Any]) -> str:
         ordered_prices = prices[:3]
 
     lines = []
-    lines.append("<b>GeoClaw Briefing</b>")
-    lines.append(f"<b>Run Timestamp:</b> {html.escape(str(run_timestamp))}")
-    lines.append(f"<b>Price Timestamp:</b> {html.escape(str(price_timestamp))}")
-    if macro_freshness_note:
-        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label} - {html.escape(macro_freshness_note)}")
-    else:
-        lines.append(f"<b>Macro Freshness:</b> {macro_freshness_label}")
-    lines.append(f"<b>Signal Freshness:</b> {html.escape(_signal_freshness_line(signal_freshness))}")
-    lines.append(f"<b>Run Status:</b> {run_health}")
+    lines.append("<b>GeoClaw Intelligence Briefing</b>")
+    lines.append(f"<b>Run:</b> {html.escape(str(run_timestamp))} | <b>Status:</b> {run_health}")
     lines.append("")
-    lines.append(f"<b>Market Bias:</b> <i>{html.escape(bias)}</i>")
-    lines.append(
-        f"<b>Signal Totals:</b> BUY {_fmt_number(buy_total)} | SELL {_fmt_number(sell_total)}"
-    )
 
+    # Market Overview
+    bias_emoji = {"BULLISH": "▲", "BEARISH": "▼", "NEUTRAL": "◆"}.get(bias, "◆")
+    lines.append(f"<b>{bias_emoji} Market Bias: {html.escape(bias)}</b>")
+    total = buy_total + sell_total
+    if total > 0:
+        conviction = max(buy_total, sell_total) / total * 100
+        lines.append(f"  Conviction: {_fmt_number(conviction, 0)}% | BUY {_fmt_number(buy_total)} vs SELL {_fmt_number(sell_total)}")
+    lines.append("")
+
+    # Prices with change indicators
     if ordered_prices:
-        price_bits = []
-        for price in ordered_prices[:4]:
+        lines.append("<b>Key Prices:</b>")
+        for price in ordered_prices[:6]:
             ticker = html.escape(str(price.get("ticker", "")))
-            price_bits.append(f"{ticker} {_fmt_number(price.get('price'), 2)}")
-        lines.append(f"<b>Prices:</b> {' | '.join(price_bits)}")
+            price_val = _fmt_number(price.get("price"), 2)
+            lines.append(f"  {ticker}: {price_val}")
+        lines.append("")
 
-    lines.append("")
+    # Directional Signals as predictions
     lines.append("<b>Directional Signals:</b>")
     if signals:
         for idx, signal in enumerate(signals[:5], 1):
-            direction = html.escape(str(signal.get("direction", "HOLD")).upper())
+            direction = str(signal.get("direction", "HOLD")).upper()
             name = html.escape(str(signal.get("signal_name", "Unknown signal")))
-            confidence = _fmt_number(signal.get("confidence", 0), 0)
-            lines.append(f"{idx}. <b>{direction}</b> {name} ({confidence})")
+            confidence = float(signal.get("confidence", 0) or 0)
+            conf_bar = _confidence_bar(confidence)
+            arrow = "▲" if direction == "BUY" else ("▼" if direction == "SELL" else "—")
+            lines.append(f"  {arrow} <b>{direction}</b> {name}")
+            lines.append(f"    Confidence: {conf_bar} {_fmt_number(confidence, 0)}%")
+            explanation = str(signal.get("explanation_plain_english") or "").strip()
+            if explanation:
+                lines.append(f"    {html.escape(explanation[:120])}")
     else:
-        lines.append("No fresh BUY/SELL signals in the last 48 hours.")
+        lines.append("  No fresh BUY/SELL signals in the last 48 hours.")
+    lines.append("")
 
-    lines.append("")
+    # Macro Insight
     lines.append(f"<b>Macro Insight:</b> {_pick_macro_insight(metrics)}")
+    if macro_freshness_note:
+        lines.append(f"  <i>({macro_freshness_label}: {html.escape(macro_freshness_note[:100])})</i>")
     lines.append("")
+
+    # Active Theses (if available in run_state)
+    theses = run_state.get("active_theses") or []
+    if theses:
+        lines.append("<b>Active Theses:</b>")
+        for thesis in theses[:3]:
+            claim = html.escape(str(thesis.get("current_claim") or thesis.get("thesis_key") or "")[:100])
+            conf = float(thesis.get("confidence", 0) or 0)
+            status = str(thesis.get("status", "active"))
+            evidence = int(thesis.get("evidence_count", 0) or 0)
+            conf_pct = round(conf * 100) if conf <= 1 else round(conf)
+            lines.append(f"  • {claim}")
+            lines.append(f"    {_confidence_bar(conf_pct)} {conf_pct}% | {status} | {evidence} sources")
+        lines.append("")
+
+    # Investigation findings (if agent did web searches)
+    investigations = run_state.get("investigation_findings") or []
+    if investigations:
+        lines.append("<b>Agent Investigations:</b>")
+        for finding in investigations[:3]:
+            lines.append(f"  • {html.escape(str(finding)[:140])}")
+        lines.append("")
+
+    # Conservative Read
     lines.append(
-        f"<b>Conservative Read:</b> {_conservative_read(bias, buy_total, sell_total, len(signals))}"
+        f"<b>Assessment:</b> {_conservative_read(bias, buy_total, sell_total, len(signals))}"
     )
 
     if run_state.get("degraded_mode"):
         lines.append("")
-        lines.append("<b>Degraded Notes:</b>")
-        for note in (run_state.get("degradation_notes") or [])[:5]:
-            lines.append(f"- {html.escape(str(note))}")
+        lines.append("<b>⚠ Degraded:</b>")
+        for note in (run_state.get("degradation_notes") or [])[:3]:
+            lines.append(f"  - {html.escape(str(note)[:80])}")
 
     if run_state.get("briefing_note"):
         lines.append("")
-        lines.append(f"<b>Agent Note:</b> {html.escape(str(run_state['briefing_note']))}")
+        lines.append(f"<b>Note:</b> {html.escape(str(run_state['briefing_note']))}")
 
     return "\n".join(lines)
