@@ -15,9 +15,12 @@ from .base import NewsSource, clean_text
 
 
 DEFAULT_RSS_FEEDS = [
+    {"name": "NHK Japan", "url": "https://www3.nhk.or.jp/rss/news/cat0.xml"},
+    {"name": "CNBC Markets", "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=19854910"},
+    {"name": "Yahoo Finance", "url": "https://finance.yahoo.com/news/rssindex"},
+    {"name": "MarketWatch", "url": "https://feeds.marketwatch.com/marketwatch/topstories/"},
     {"name": "BBC Business", "url": "https://feeds.bbci.co.uk/news/business/rss.xml"},
-    {"name": "BBC World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
-        ]
+]
 
 
 class RSSSource(NewsSource):

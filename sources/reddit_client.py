@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-_SUBREDDITS = ["worldnews", "economics", "wallstreetbets", "stocks", "geopolitics"]
+_SUBREDDITS = ["JapanFinance", "economics", "stocks", "worldnews", "geopolitics"]
 _USER_AGENT = "GeoClaw/1.0 (macro-intelligence; +https://github.com/geoclaw)"
 _TIMEOUT = 10
 _MAX_PER_SUB = 8
