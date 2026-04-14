@@ -214,11 +214,51 @@ def _signal_freshness_line(freshness: Dict[str, Any]) -> str:
     return f"{status} - latest {latest}, age {age}h"
 
 
+def _confidence_pct(value: Any) -> str:
+    try:
+        numeric = float(value or 0.0)
+    except Exception:
+        numeric = 0.0
+    if numeric <= 1.0:
+        numeric *= 100.0
+    return f"{numeric:.0f}%"
+
+
+def _thesis_lines(thesis_result: Dict[str, Any]) -> List[str]:
+    if not thesis_result or thesis_result.get("status") != "ok":
+        return []
+    current_theses = list(thesis_result.get("current_run_theses") or [])
+    changed_keys = {
+        str(item.get("thesis_key") or "")
+        for item in (thesis_result.get("changed_theses") or [])
+    }
+    lines = ["<b>Active Thesis:</b>"]
+    if not current_theses:
+        lines.append("No thesis tracker output was available for this run.")
+        return lines
+    for idx, thesis in enumerate(current_theses[:3], 1):
+        key = str(thesis.get("thesis_key") or "")
+        title = html.escape(str(thesis.get("title") or key or "Current-run thesis"))
+        status = html.escape(str(thesis.get("status") or "watching").upper())
+        direction = html.escape(str(thesis.get("direction") or "neutral"))
+        confidence = _confidence_pct(thesis.get("confidence"))
+        label = "Evidence Changed" if key in changed_keys else "Watching"
+        summary = html.escape(str(thesis.get("summary") or ""))
+        reason = html.escape(str(thesis.get("last_change_reason") or ""))
+        lines.append(f"{idx}. <b>{label}:</b> {title} ({status}, {direction}, Confidence {confidence})")
+        if summary:
+            lines.append(f"   {summary}")
+        if reason:
+            lines.append(f"   Last change: {reason}")
+    return lines
+
+
 def build_briefing(run_state: Dict[str, Any]) -> str:
     signals = _dedupe_signals(run_state.get("signals_snapshot", []) or [])
     prices_result = run_state.get("price_data", {}) or {}
     macro_result = run_state.get("macro_metrics", {}) or {}
     bias_result = run_state.get("market_bias", {}) or {}
+    thesis_result = run_state.get("thesis_tracker", {}) or {}
 
     metrics = macro_result.get("metrics", []) or []
     prices = prices_result.get("prices", []) or []
@@ -284,6 +324,11 @@ def build_briefing(run_state: Dict[str, Any]) -> str:
     lines.append(
         f"<b>Conservative Read:</b> {_conservative_read(bias, buy_total, sell_total, len(signals))}"
     )
+
+    thesis_lines = _thesis_lines(thesis_result)
+    if thesis_lines:
+        lines.append("")
+        lines.extend(thesis_lines)
 
     if run_state.get("degraded_mode"):
         lines.append("")

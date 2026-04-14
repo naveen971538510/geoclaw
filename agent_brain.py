@@ -49,6 +49,7 @@ from intelligence.db import save_memory_snapshot
 _load_local_env(ENV_FILE)
 
 from briefing_formatter import build_briefing
+from services.thesis_tracker import update_theses_from_run_state
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = "llama-3.1-8b-instant"
@@ -798,6 +799,26 @@ def tool_get_active_theses(run_state: Optional[Dict[str, Any]] = None, **kwargs)
         return {"theses": [], "count": 0, "error": str(exc)}
 
 
+def _update_thesis_tracker(run_state: Dict[str, Any]) -> Dict[str, Any]:
+    if "thesis_tracker" in run_state:
+        return run_state["thesis_tracker"]
+    try:
+        result = update_theses_from_run_state(run_state)
+    except Exception as exc:
+        result = {"status": "error", "message": str(exc), "active_thesis_count": 0, "changed_thesis_count": 0}
+        _mark_degraded(run_state, "thesis_tracker_error", str(exc))
+    run_state["thesis_tracker"] = result
+    if result.get("status") != "ok":
+        _mark_degraded(run_state, "thesis_tracker_error", str(result.get("message") or result))
+    logger.info(
+        "Thesis tracker result: status=%s active=%s changed=%s",
+        result.get("status", "unknown"),
+        result.get("active_thesis_count", 0),
+        result.get("changed_thesis_count", 0),
+    )
+    return result
+
+
 def _read_operator_status() -> Dict[str, Any]:
     try:
         if STATUS_FILE.exists():
@@ -850,6 +871,8 @@ def _build_operator_status(
     signal_freshness = signals_result.get("freshness") or _signal_freshness(signals_result.get("signals", []) or [])
     macro_freshness = macro_result.get("freshness", {})
     price_refresh = prices_result.get("refresh", {}) or {}
+    thesis_result = run_state.get("thesis_tracker") or tool_state.get("update_theses", {}) or {}
+    top_theses = list(thesis_result.get("top_theses") or [])[:5]
 
     previous_history = previous.get("recent_runs", [])
     if not isinstance(previous_history, list):
@@ -910,6 +933,24 @@ def _build_operator_status(
         "telegram_result": dict(telegram_result or {}),
         "signal_count": signals_result.get("count", 0),
         "price_count": prices_result.get("count", 0),
+        "thesis_tracker_result": {
+            "status": thesis_result.get("status", "unknown"),
+            "table": thesis_result.get("table", ""),
+            "storage_path": thesis_result.get("storage_path", ""),
+        },
+        "active_thesis_count": thesis_result.get("active_thesis_count", 0),
+        "changed_thesis_count": thesis_result.get("changed_thesis_count", 0),
+        "top_theses": [
+            {
+                "thesis_key": thesis.get("thesis_key", ""),
+                "title": thesis.get("title", ""),
+                "status": thesis.get("status", ""),
+                "direction": thesis.get("direction", ""),
+                "confidence": thesis.get("confidence", 0),
+                "last_change_reason": thesis.get("last_change_reason", ""),
+            }
+            for thesis in top_theses
+        ],
         "recent_runs": recent_runs,
         "recent_health_summary": {
             "limit": RUN_HISTORY_LIMIT,
@@ -1394,6 +1435,7 @@ def _prepare_grounded_snapshot(run_state: Dict[str, Any]) -> Dict[str, Any]:
         run_state=run_state,
     )
     tool_state["assess_market_bias"] = tool_assess_market_bias(run_state=run_state)
+    tool_state["update_theses"] = _update_thesis_tracker(run_state)
     return _attach_run_status(tool_state, run_state)
 
 
@@ -1414,6 +1456,8 @@ def _complete_grounded_tool_state(
         )
     if "assess_market_bias" not in tool_state:
         tool_state["assess_market_bias"] = tool_assess_market_bias(run_state=run_state)
+    if "update_theses" not in tool_state:
+        tool_state["update_theses"] = _update_thesis_tracker(run_state)
     return _attach_run_status(tool_state, run_state)
 
 
