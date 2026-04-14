@@ -971,6 +971,53 @@ async def api_stream(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Live JP225 price endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/live/jp225")
+def api_live_jp225():
+    """Fetch live JP225 price + intraday OHLCV (1-minute bars, last 60)."""
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker("^N225")
+        info = ticker.fast_info
+        price = float(info.last_price or 0)
+        prev_close = float(info.previous_close or 0)
+        open_price = float(info.open or 0)
+        change = price - prev_close if prev_close else 0
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        # 1-minute bars for today
+        hist = ticker.history(period="1d", interval="1m")
+        candles = []
+        for ts, row in hist.iterrows():
+            candles.append({
+                "t": ts.isoformat(),
+                "o": round(float(row["Open"]), 2),
+                "h": round(float(row["High"]), 2),
+                "l": round(float(row["Low"]), 2),
+                "c": round(float(row["Close"]), 2),
+            })
+        day_high = max((c["h"] for c in candles), default=price)
+        day_low = min((c["l"] for c in candles), default=price)
+        return JSONResponse({
+            "symbol": "JP225",
+            "name": "Nikkei 225 CFD",
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "prev_close": round(prev_close, 2),
+            "open": round(open_price, 2),
+            "day_high": round(day_high, 2),
+            "day_low": round(day_low, 2),
+            "direction": "up" if change > 0 else ("down" if change < 0 else "flat"),
+            "candles": candles[-60:],
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Agentic intelligence endpoints
 # ---------------------------------------------------------------------------
 
