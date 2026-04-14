@@ -1,154 +1,198 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 const API_BASE = "http://127.0.0.1:8000/api";
 
 const css = `
 :root {
-  --bg: #0d1117; --card: #161b22; --border: #30363d;
-  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
-  --bull: #3fb950; --bear: #f85149; --neutral: #d29922;
+  --bg: #0a0e17; --card: #111827; --border: #1f2937;
+  --text: #f1f5f9; --muted: #64748b; --accent: #3b82f6;
+  --bull: #22c55e; --bear: #ef4444; --neutral: #f59e0b;
 }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+.pulse { animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.4 } }
 `;
 
 async function api(path) {
   const r = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
+  if (!r.ok) throw new Error(`${r.status}`);
   return r.json();
 }
 
-function Card({ title, children, style }) {
+function Sparkline({ candles, color }) {
+  if (!candles || candles.length < 2) return null;
+  const closes = candles.map(c => c.c);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = max - min || 1;
+  const W = 320, H = 60;
+  const pts = closes.map((v, i) => {
+    const x = (i / (closes.length - 1)) * W;
+    const y = H - ((v - min) / range) * H;
+    return `${x},${y}`;
+  }).join(" ");
   return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, ...style }}>
-      {title && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>{title}</div>}
-      {children}
-    </div>
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: "block", height: 60 }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
+    </svg>
   );
 }
 
-function Tag({ color, children }) {
-  return <span style={{ padding: "2px 8px", borderRadius: 4, background: color + "22", color, fontSize: 12, fontWeight: 700 }}>{children}</span>;
+function Card({ children, style }) {
+  return <div style={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, padding: 16, ...style }}>{children}</div>;
+}
+
+function Label({ children }) {
+  return <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{children}</div>;
 }
 
 export default function App() {
-  const [price, setPrice] = useState(null);
-  const [bias, setBias] = useState("NEUTRAL");
+  const [live, setLive] = useState(null);
+  const [bias, setBias] = useState("—");
+  const [bullCount, setBullCount] = useState(0);
+  const [bearCount, setBearCount] = useState(0);
   const [signals, setSignals] = useState([]);
   const [news, setNews] = useState([]);
   const [briefing, setBriefing] = useState("");
-  const [lastRun, setLastRun] = useState("");
   const [err, setErr] = useState("");
   const [now, setNow] = useState(new Date());
+  const prevPrice = useRef(null);
+  const [flash, setFlash] = useState(null); // "up" | "down"
 
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
 
-  const load = useCallback(async () => {
-    setErr("");
+  // Live JP225 — refresh every 15s
+  const loadLive = useCallback(async () => {
     try {
-      const [priceData, overview, newsData] = await Promise.all([
-        api("/prices"),
-        api("/dashboard/overview"),
-        api("/news"),
-      ]);
-
-      const jp = (priceData.prices || [])[0];
-      if (jp) setPrice(jp);
-
-      const ov = overview || {};
-      setBias((ov.market_bias?.label || "NEUTRAL").toUpperCase());
-      setSignals((ov.signals || []).slice(0, 20));
-      setLastRun(ov.last_run_at || "");
-      setNews((newsData.news || []).slice(0, 15));
-    } catch (e) {
-      setErr(String(e.message || e));
-    }
+      const d = await api("/live/jp225");
+      if (d.error) return;
+      if (prevPrice.current !== null && d.price !== prevPrice.current) {
+        setFlash(d.price > prevPrice.current ? "up" : "down");
+        setTimeout(() => setFlash(null), 800);
+      }
+      prevPrice.current = d.price;
+      setLive(d);
+    } catch { /* silent */ }
   }, []);
 
+  // Signals + overview — refresh every 60s
+  const loadOverview = useCallback(async () => {
+    try {
+      const d = await api("/dashboard/overview");
+      const sigs = d.signals || [];
+      setBias(d.market_bias?.label || "NEUTRAL");
+      setBullCount(sigs.filter(s => ["BUY","BULLISH"].includes((s.direction||"").toUpperCase())).length);
+      setBearCount(sigs.filter(s => ["SELL","BEARISH"].includes((s.direction||"").toUpperCase())).length);
+      setSignals(sigs.slice(0, 25));
+    } catch (e) { setErr(String(e)); }
+  }, []);
+
+  // News — refresh every 5 min
+  const loadNews = useCallback(async () => {
+    try { const d = await api("/news"); setNews((d.news || []).slice(0, 12)); } catch { }
+  }, []);
+
+  // Briefing — refresh every 5 min
   const loadBriefing = useCallback(async () => {
-    try {
-      const d = await api("/briefing");
-      setBriefing(d.briefing || d.text || "");
-    } catch {
-      setBriefing("");
-    }
+    try { const d = await api("/briefing"); setBriefing(d.briefing || ""); } catch { }
   }, []);
 
-  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
-  useEffect(() => { loadBriefing(); const t = setInterval(loadBriefing, 120000); return () => clearInterval(t); }, [loadBriefing]);
+  useEffect(() => { loadLive(); const t = setInterval(loadLive, 15000); return () => clearInterval(t); }, [loadLive]);
+  useEffect(() => { loadOverview(); const t = setInterval(loadOverview, 60000); return () => clearInterval(t); }, [loadOverview]);
+  useEffect(() => { loadNews(); const t = setInterval(loadNews, 300000); return () => clearInterval(t); }, [loadNews]);
+  useEffect(() => { loadBriefing(); const t = setInterval(loadBriefing, 300000); return () => clearInterval(t); }, [loadBriefing]);
 
   const biasColor = bias === "BULLISH" ? "var(--bull)" : bias === "BEARISH" ? "var(--bear)" : "var(--neutral)";
-
-  const bullCount = signals.filter(s => ["BULLISH","BUY"].includes((s.direction || "").toUpperCase())).length;
-  const bearCount = signals.filter(s => ["BEARISH","SELL"].includes((s.direction || "").toUpperCase())).length;
+  const priceColor = live?.direction === "up" ? "var(--bull)" : live?.direction === "down" ? "var(--bear)" : "var(--text)";
+  const flashBg = flash === "up" ? "#22c55e22" : flash === "down" ? "#ef444422" : "transparent";
 
   return (
     <>
       <style>{css}</style>
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "20px 16px" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "16px 20px" }}>
 
         {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>GeoClaw · Japan 225 CFD</h1>
-            <div style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>GeoClaw Intelligence</div>
+            <h1 style={{ margin: "2px 0 0", fontSize: 20, fontWeight: 700 }}>Nikkei 225 CFD · Live</h1>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 13, color: "var(--muted)" }}>
               {now.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              {lastRun && <span style={{ marginLeft: 16 }}>Last agent run: {new Date(lastRun).toLocaleTimeString()}</span>}
+            </div>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--bull)" }} className="pulse" />
+          </div>
+        </div>
+
+        {err && <div style={{ color: "var(--bear)", fontSize: 12, marginBottom: 12 }}>{err}</div>}
+
+        {/* Live price hero */}
+        <Card style={{ marginBottom: 16, transition: "background 0.4s", background: flash ? flashBg : "var(--card)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 24, alignItems: "center" }}>
+            <div>
+              <Label>Nikkei 225 CFD · ^N225</Label>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+                <span style={{ fontSize: 48, fontWeight: 800, color: priceColor, fontVariantNumeric: "tabular-nums" }}>
+                  {live ? Number(live.price).toLocaleString("en-GB", { maximumFractionDigits: 0 }) : "—"}
+                </span>
+                {live && (
+                  <span style={{ fontSize: 20, fontWeight: 600, color: priceColor }}>
+                    {live.change >= 0 ? "▲" : "▼"} {Math.abs(live.change).toLocaleString("en-GB", { maximumFractionDigits: 0 })} ({live.change_pct >= 0 ? "+" : ""}{live.change_pct.toFixed(2)}%)
+                  </span>
+                )}
+              </div>
+              {live && (
+                <div style={{ display: "flex", gap: 20, marginTop: 8, fontSize: 13, color: "var(--muted)" }}>
+                  <span>Open <b style={{ color: "var(--text)" }}>{Number(live.open).toLocaleString()}</b></span>
+                  <span>H <b style={{ color: "var(--bull)" }}>{Number(live.day_high).toLocaleString()}</b></span>
+                  <span>L <b style={{ color: "var(--bear)" }}>{Number(live.day_low).toLocaleString()}</b></span>
+                  <span>Prev Close <b style={{ color: "var(--text)" }}>{Number(live.prev_close).toLocaleString()}</b></span>
+                </div>
+              )}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <Sparkline candles={live?.candles} color={priceColor} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 120 }}>
+              <div style={{ textAlign: "center", padding: "10px 16px", borderRadius: 8, background: biasColor + "22", border: `1px solid ${biasColor}44` }}>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>BIAS</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: biasColor }}>{bias}</div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <div style={{ textAlign: "center", padding: "6px 8px", borderRadius: 6, background: "#22c55e11", border: "1px solid #22c55e33" }}>
+                  <div style={{ fontSize: 10, color: "var(--muted)" }}>BULL</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "var(--bull)" }}>{bullCount}</div>
+                </div>
+                <div style={{ textAlign: "center", padding: "6px 8px", borderRadius: 6, background: "#ef444411", border: "1px solid #ef444433" }}>
+                  <div style={{ fontSize: 10, color: "var(--muted)" }}>BEAR</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "var(--bear)" }}>{bearCount}</div>
+                </div>
+              </div>
             </div>
           </div>
-          <button onClick={load} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", cursor: "pointer", fontSize: 13 }}>
-            ↻ Refresh
-          </button>
-        </div>
+        </Card>
 
-        {err && <div style={{ color: "var(--bear)", padding: "10px 14px", border: "1px solid var(--bear)", borderRadius: 8, marginBottom: 16, fontSize: 13 }}>{err}</div>}
-
-        {/* Top row: price + bias + signal summary */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
-          <Card title="JP225 Price">
-            <div style={{ fontSize: 30, fontWeight: 700 }}>
-              {price?.price ? Number(price.price).toLocaleString("en-GB", { maximumFractionDigits: 0 }) : "—"}
-            </div>
-            <div style={{ fontSize: 13, marginTop: 4 }}>
-              <Tag color={price?.direction === "up" ? "var(--bull)" : price?.direction === "down" ? "var(--bear)" : "var(--muted)"}>
-                {price?.direction?.toUpperCase() || "—"}
-              </Tag>
-            </div>
-          </Card>
-
-          <Card title="Market Bias">
-            <div style={{ fontSize: 28, fontWeight: 700, color: biasColor }}>{bias}</div>
-          </Card>
-
-          <Card title="Bullish Signals">
-            <div style={{ fontSize: 30, fontWeight: 700, color: "var(--bull)" }}>{bullCount}</div>
-          </Card>
-
-          <Card title="Bearish Signals">
-            <div style={{ fontSize: 30, fontWeight: 700, color: "var(--bear)" }}>{bearCount}</div>
-          </Card>
-        </div>
-
-        {/* Middle: briefing + news */}
+        {/* Briefing + News */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-          <Card title="AI Briefing">
-            <div style={{ fontSize: 13, lineHeight: 1.7, color: "var(--text)", maxHeight: 320, overflowY: "auto", whiteSpace: "pre-wrap" }}>
-              {briefing || <span style={{ color: "var(--muted)" }}>Generating briefing…</span>}
+          <Card>
+            <Label>AI Briefing</Label>
+            <div style={{ fontSize: 13, lineHeight: 1.7, maxHeight: 280, overflowY: "auto", whiteSpace: "pre-wrap", color: "var(--text)" }}>
+              {briefing || <span style={{ color: "var(--muted)" }}>Loading…</span>}
             </div>
           </Card>
-
-          <Card title="Latest News">
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
-              {news.length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>No news yet.</div>}
+          <Card>
+            <Label>Latest News</Label>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 280, overflowY: "auto" }}>
+              {news.length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>No news.</div>}
               {news.map(n => (
-                <div key={n.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 10 }}>
-                  <a href={n.url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4, display: "block" }}>
+                <div key={n.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+                  <a href={n.url} target="_blank" rel="noreferrer"
+                    style={{ color: "var(--accent)", fontSize: 13, fontWeight: 500, textDecoration: "none", lineHeight: 1.4, display: "block" }}>
                     {n.headline}
                   </a>
-                  <div style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
+                  <div style={{ color: "var(--muted)", fontSize: 11, marginTop: 3 }}>
                     {n.source} · {n.ts ? new Date(n.ts).toLocaleTimeString() : ""}
                   </div>
                 </div>
@@ -157,29 +201,34 @@ export default function App() {
           </Card>
         </div>
 
-        {/* Signals table */}
-        <Card title="Signals">
-          {signals.length === 0 && <div style={{ color: "var(--muted)", fontSize: 13 }}>No signals yet. Run the agent to generate signals.</div>}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {signals.map(s => {
-              const dir = (s.direction || "").toUpperCase();
-              const color = ["BULLISH","BUY"].includes(dir) ? "var(--bull)" : ["BEARISH","SELL"].includes(dir) ? "var(--bear)" : "var(--muted)";
-              return (
-                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "#0d1117", borderRadius: 8, border: "1px solid var(--border)" }}>
-                  <Tag color={color}>{dir || "HOLD"}</Tag>
-                  <div style={{ flex: 1, fontSize: 13, fontWeight: 600 }}>{s.signal_name}</div>
-                  <div style={{ width: 80, height: 6, background: "#21262d", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ width: `${Math.min(100, Number(s.confidence) || 0)}%`, height: "100%", background: color }} />
+        {/* Signals */}
+        <Card>
+          <Label>Signals ({signals.length})</Label>
+          {signals.length === 0
+            ? <div style={{ color: "var(--muted)", fontSize: 13 }}>No signals yet.</div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {signals.map(s => {
+                const dir = (s.direction || "").toUpperCase();
+                const isBull = ["BUY","BULLISH"].includes(dir);
+                const isBear = ["SELL","BEARISH"].includes(dir);
+                const c = isBull ? "var(--bull)" : isBear ? "var(--bear)" : "var(--muted)";
+                return (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "#0a0e17", borderRadius: 6, border: "1px solid var(--border)" }}>
+                    <div style={{ width: 28, fontSize: 11, fontWeight: 700, color: c, flexShrink: 0 }}>{isBull ? "BUY" : isBear ? "SELL" : "—"}</div>
+                    <div style={{ flex: 1, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.signal_name}</div>
+                    <div style={{ width: 60, height: 4, background: "#1f2937", borderRadius: 2, overflow: "hidden", flexShrink: 0 }}>
+                      <div style={{ width: `${Math.min(100, s.confidence || 0)}%`, height: "100%", background: c }} />
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", minWidth: 34, textAlign: "right" }}>{Math.round(s.confidence || 0)}%</div>
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--muted)", minWidth: 36, textAlign: "right" }}>{Math.round(s.confidence || 0)}%</div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          }
         </Card>
 
-        <div style={{ marginTop: 16, fontSize: 12, color: "var(--muted)", textAlign: "center" }}>
-          Refreshes every 30s · GeoClaw Intelligence
+        <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+          Price updates every 15s · Signals every 60s · GeoClaw
         </div>
       </div>
     </>
