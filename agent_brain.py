@@ -115,7 +115,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_price_data",
-            "description": "Get latest prices for tracked symbols (GLD, USO, GBPUSD, SPY, QQQ, etc.)",
+            "description": "Get latest price for Japan 225 CFD (^N225 / JP225).",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -323,20 +323,10 @@ def _refresh_price_data_from_feed() -> Dict:
         ensure_intelligence_schema()
 
         source_symbols = [
-            "^GSPC",      # -> SPX
-            "GC=F",       # -> XAUUSD
-            "BTC-USD",    # -> BTCUSD
-            "GLD",
-            "USO",
-            "GBPUSD=X",   # -> GBPUSD
-            "SPY",
-            "QQQ",
+            "^N225",      # -> JP225 (Japan 225 CFD)
         ]
         symbol_map = {
-            "^GSPC": "SPX",
-            "GC=F": "XAUUSD",
-            "BTC-USD": "BTCUSD",
-            "GBPUSD=X": "GBPUSD",
+            "^N225": "JP225",
         }
 
         feed = PriceFeed()
@@ -1403,20 +1393,21 @@ def _build_memory_suffix(run_id: str) -> str:
 # AGENTIC LOOP
 # ─────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are GeoClaw Agent Brain — an autonomous macroeconomic intelligence agent.
+SYSTEM_PROMPT = """You are GeoClaw Agent Brain — an autonomous intelligence agent focused on Japan 225 CFD (^N225 / JP225).
 
 Your job:
-1. Assess current market conditions using available tools
-2. Run the signal engine to get fresh signals
-3. Analyse signals, prices, and macro data
-4. Determine market bias (BULLISH/BEARISH/NEUTRAL)
-5. Finish after the tool outputs are gathered
+1. Fetch the current JP225 price
+2. Run the signal engine to get fresh signals relevant to Japan 225
+3. Analyse signals, price, and macro data through the lens of JP225
+4. Determine market bias for JP225 (BULLISH/BEARISH/NEUTRAL)
+5. Finish after tool outputs are gathered
 6. Let the runner send the grounded Telegram briefing
 
 Rules:
 - Always run the signal engine first, then fetch signals
+- Focus all analysis on Japan 225 CFD — ignore unrelated instruments
 - Be concise and direct — traders need fast, clear information
-- Include market bias, top 3-5 directional signals, and one key macro insight
+- Include JP225 bias, top 3-5 directional signals, and one key macro insight (JPY, BOJ, Asia session)
 - Format with Telegram HTML only: <b>bold</b>, <i>italic</i>, newlines with \n not <br>
 - Do not make up data — only use what tools return
 - Do not send Telegram directly; the runner sends a grounded briefing from current-run tool outputs
