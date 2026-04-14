@@ -82,8 +82,8 @@ export default function App() {
 
   const biasColor = bias === "BULLISH" ? "var(--bull)" : bias === "BEARISH" ? "var(--bear)" : "var(--neutral)";
 
-  const bullCount = signals.filter(s => (s.direction || "").toUpperCase() === "BULLISH").length;
-  const bearCount = signals.filter(s => (s.direction || "").toUpperCase() === "BEARISH").length;
+  const bullCount = signals.filter(s => ["BULLISH","BUY"].includes((s.direction || "").toUpperCase())).length;
+  const bearCount = signals.filter(s => ["BEARISH","SELL"].includes((s.direction || "").toUpperCase())).length;
 
   return (
     <>
@@ -163,7 +163,7 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {signals.map(s => {
               const dir = (s.direction || "").toUpperCase();
-              const color = dir === "BULLISH" ? "var(--bull)" : dir === "BEARISH" ? "var(--bear)" : "var(--muted)";
+              const color = ["BULLISH","BUY"].includes(dir) ? "var(--bull)" : ["BEARISH","SELL"].includes(dir) ? "var(--bear)" : "var(--muted)";
               return (
                 <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: "#0d1117", borderRadius: 8, border: "1px solid var(--border)" }}>
                   <Tag color={color}>{dir || "HOLD"}</Tag>

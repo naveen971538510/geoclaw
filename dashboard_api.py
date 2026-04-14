@@ -250,16 +250,26 @@ def _local_latest_signals(limit: int = 30) -> List[Dict[str, Any]]:
         title = str(row.get("title") or "").strip() or thesis[:160] or "GeoClaw thesis"
         confidence = max(0.0, min(float(row.get("confidence") or 0.0) * 100.0, 100.0))
         reason = str(row.get("last_update_reason") or "").strip()
+        risk = str(row.get("terminal_risk") or "").strip().upper()
         if not reason:
-            risk = str(row.get("terminal_risk") or "").strip()
-            reason = risk or "Local SQLite mode: thesis-derived signal from GeoClaw agent state."
+            reason = risk or "Thesis-derived signal."
+        status = str(row.get("status") or "").strip().lower()
+        # Map thesis fields to a direction
+        if status == "confirmed" or confidence >= 75:
+            direction = "BUY"
+        elif "high" in risk or "extreme" in risk or status == "bearish":
+            direction = "SELL"
+        elif confidence >= 50:
+            direction = "BUY"
+        else:
+            direction = "HOLD"
         signals.append(
             enrich_signal_row(
                 {
                     "id": row.get("id"),
                     "signal_name": title,
                     "value": round(confidence, 1),
-                    "direction": "HOLD",
+                    "direction": direction,
                     "confidence": round(confidence, 1),
                     "explanation_plain_english": reason,
                     "ts": row.get("last_updated_at") or row.get("created_at") or "",
