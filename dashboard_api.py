@@ -112,9 +112,7 @@ async def _auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 PRICE_PANEL_META = {
-    "BTCUSD": {"label": "BTC", "name": "Bitcoin"},
-    "SPX": {"label": "SPX", "name": "S&P 500"},
-    "XAUUSD": {"label": "XAUUSD", "name": "Gold"},
+    "JP225": {"label": "JP225", "name": "Japan 225 CFD"},
 }
 
 STRIPE_TIERS = {
@@ -286,8 +284,8 @@ def _local_dashboard_overview_payload() -> Dict[str, Any]:
     }
 
 
-def _local_prices_payload(symbols: str = "BTCUSD,SPX,XAUUSD", points: int = 18) -> Dict[str, Any]:
-    aliases = {"BTCUSD": "BTC-USD", "SPX": "SPY", "XAUUSD": "GC=F"}
+def _local_prices_payload(symbols: str = "JP225", points: int = 18) -> Dict[str, Any]:
+    aliases = {"JP225": "^N225"}
     requested = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
     ordered = [symbol for symbol in requested if symbol in PRICE_PANEL_META] or list(PRICE_PANEL_META.keys())
     local_symbols = [aliases.get(symbol, symbol) for symbol in ordered]
@@ -506,7 +504,7 @@ def api_dashboard_overview():
 
 
 @app.get("/api/prices")
-def api_prices(symbols: str = "BTCUSD,SPX,XAUUSD", points: int = 18):
+def api_prices(symbols: str = "JP225", points: int = 18):
     try:
         if _local_sqlite_mode():
             return JSONResponse(_local_prices_payload(symbols=symbols, points=points))
@@ -861,7 +859,7 @@ async def api_stream(request: Request):
     Connect with: const es = new EventSource('/api/stream')
     Auth: same rules as the rest of /api/* (GEOCLAW_LOCAL_TOKEN or localhost).
     """
-    _SSE_INTERVAL = 5  # seconds between checks
+    _SSE_INTERVAL = 30  # seconds between checks
     _last_hash = ""
 
     async def _event_generator():

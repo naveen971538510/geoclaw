@@ -9,23 +9,7 @@ from services.logging_service import get_logger
 logger = get_logger("price_feed")
 
 WATCHLIST_SYMBOLS = {
-    "GC=F": {"name": "Gold Futures", "category": "commodity"},
-    "CL=F": {"name": "Brent Crude Oil", "category": "energy"},
-    "DX-Y.NYB": {"name": "US Dollar Index", "category": "fx"},
-    "^VIX": {"name": "VIX Fear Index", "category": "volatility"},
-    "^TNX": {"name": "10Y US Treasury Yield", "category": "rates"},
-    "^TYX": {"name": "30Y US Treasury Yield", "category": "rates"},
-    "SPY": {"name": "S&P 500 ETF", "category": "equity"},
-    "QQQ": {"name": "Nasdaq 100 ETF", "category": "equity"},
-    "EEM": {"name": "Emerging Markets ETF", "category": "equity"},
-    "XLE": {"name": "Energy Sector ETF", "category": "equity"},
-    "XLF": {"name": "Financials ETF", "category": "equity"},
-    "GLD": {"name": "Gold ETF", "category": "commodity"},
-    "EURUSD=X": {"name": "EUR/USD", "category": "fx"},
-    "USDJPY=X": {"name": "USD/JPY", "category": "fx"},
-    "USDCNH=X": {"name": "USD/CNH", "category": "fx"},
-    "GBPUSD=X": {"name": "GBP/USD", "category": "fx"},
-    "BTC-USD": {"name": "Bitcoin", "category": "crypto"},
+    "^N225": {"name": "Japan 225 CFD", "category": "equity"},
 }
 
 
