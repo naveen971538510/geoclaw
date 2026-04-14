@@ -964,6 +964,24 @@ async def api_stream(request: Request):
 # Agentic intelligence endpoints
 # ---------------------------------------------------------------------------
 
+@app.post("/api/agent/run")
+async def api_agent_run():
+    """Trigger a background agent run."""
+    try:
+        import threading
+        from agent_brain import run_agent_loop
+        def _run():
+            try:
+                run_agent_loop()
+            except Exception:
+                pass
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return JSONResponse({"status": "ok", "message": "Agent run started"})
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
 @app.get("/api/agent/reactive/status")
 def api_reactive_status():
     try:
