@@ -285,6 +285,18 @@ def _local_dashboard_overview_payload() -> Dict[str, Any]:
     active_rows = _local_latest_signals(limit=30)
     grouped = group_signals(active_rows)
     last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
+    try:
+        from services.neural_schema import NeuralSchema
+
+        neural_schema = NeuralSchema().latest_or_build(compact=True)
+    except Exception as exc:
+        neural_schema = {
+            "summary": f"Neural schema unavailable: {exc}",
+            "ranked_signals": [],
+            "gaps": [],
+            "node_count": 0,
+            "edge_count": 0,
+        }
     return {
         "status": "ok",
         "market_bias": _signal_bias_payload(active_rows),
@@ -293,6 +305,7 @@ def _local_dashboard_overview_payload() -> Dict[str, Any]:
         "grouped_signals": grouped,
         "last_updated": last_updated,
         "mode": "local_sqlite",
+        "neural_schema": neural_schema,
     }
 
 
@@ -1351,7 +1364,7 @@ def _jp225_json_payload(quote: Dict[str, Any], candles: List[Dict[str, Any]], *,
             "source_symbol": quote["source_symbol"],
             "interval": interval_meta["label"],
             "bars": len(candles[-60:]),
-            "note": f"Same-source TradingView FOREXCOM {interval_meta['label']} OHLC bars.",
+            "note": f"Same-source {quote['source']} {quote['source_symbol']} {interval_meta['label']} OHLC bars.",
         },
         "market_context": _build_jp225_market_context(quote),
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -1572,6 +1585,54 @@ def api_investigations():
         return JSONResponse({"status": "ok", "investigations": investigations, "count": len(investigations)})
     except Exception as exc:
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+@app.get("/api/intelligence/jp225")
+def api_jp225_intelligence(force: bool = False):
+    """
+    5-layer JP225 Neural Intelligence Schema.
+    Layer 1: 7 factor instruments fetched in parallel
+    Layer 2: Factor scoring -100 → +100 per JP225 impact
+    Layer 3: News NLP — headline scan for JP225 terms
+    Layer 4: LLM synthesis (Groq → OpenAI fallback)
+    Layer 5: Composite bias + confidence + trade note
+    Cached 60s. Pass ?force=true to refresh immediately.
+    """
+    try:
+        from intelligence.jp225_neural import run_neural_schema
+
+        # Pull latest headlines for news NLP layer
+        headlines: List[str] = []
+        try:
+            news_data = _news_cache.get("news") or []
+            headlines = [str(n.get("headline") or "") for n in news_data if n.get("headline")]
+        except Exception:
+            pass
+
+        # Pull live JP225 price if available
+        jp225_price, jp225_change = 0.0, 0.0
+        try:
+            cache_key = "1"
+            candle_cache = _jp225_candles_cache.get(cache_key, {})
+            # Use last known price from candle cache or price_snapshots
+            snap = _local_query(
+                "SELECT price FROM price_snapshots WHERE symbol = ? ORDER BY captured_at DESC LIMIT 1",
+                ("^N225",),
+            )
+            if snap:
+                jp225_price = float(snap[0].get("price") or 0)
+        except Exception:
+            pass
+
+        result = run_neural_schema(
+            headlines=headlines,
+            jp225_price=jp225_price,
+            jp225_change_pct=jp225_change,
+            force=force,
+        )
+        return JSONResponse(result)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/health")
