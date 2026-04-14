@@ -224,6 +224,162 @@ def _require_db():
         raise RuntimeError("DATABASE_URL is not configured")
 
 
+def _local_sqlite_mode() -> bool:
+    return str(os.environ.get("GEOCLAW_DB_BACKEND") or "").strip().lower() in {"sqlite", "sqlite3", "local"}
+
+
+def _local_query(sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    from services.db_helpers import query
+
+    return [dict(row) for row in query(sql, params)]
+
+
+def _local_latest_signals(limit: int = 30) -> List[Dict[str, Any]]:
+    rows = _local_query(
+        """
+        SELECT id, thesis_key, title, confidence, status, terminal_risk,
+               last_update_reason, created_at, last_updated_at
+        FROM agent_theses
+        WHERE COALESCE(status, '') NOT IN ('superseded', 'expired')
+        ORDER BY confidence DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit or 30), 200)),),
+    )
+    signals: List[Dict[str, Any]] = []
+    for row in rows:
+        thesis = str(row.get("thesis_key") or "")
+        title = str(row.get("title") or "").strip() or thesis[:160] or "GeoClaw thesis"
+        confidence = max(0.0, min(float(row.get("confidence") or 0.0) * 100.0, 100.0))
+        reason = str(row.get("last_update_reason") or "").strip()
+        if not reason:
+            risk = str(row.get("terminal_risk") or "").strip()
+            reason = risk or "Local SQLite mode: thesis-derived signal from GeoClaw agent state."
+        signals.append(
+            enrich_signal_row(
+                {
+                    "id": row.get("id"),
+                    "signal_name": title,
+                    "value": round(confidence, 1),
+                    "direction": "HOLD",
+                    "confidence": round(confidence, 1),
+                    "explanation_plain_english": reason,
+                    "ts": row.get("last_updated_at") or row.get("created_at") or "",
+                }
+            )
+        )
+    return signals
+
+
+def _local_dashboard_overview_payload() -> Dict[str, Any]:
+    active_rows = _local_latest_signals(limit=30)
+    grouped = group_signals(active_rows)
+    last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
+    return {
+        "status": "ok",
+        "market_bias": _signal_bias_payload(active_rows),
+        "group_order": list(SIGNAL_SECTION_ORDER),
+        "signals": active_rows,
+        "grouped_signals": grouped,
+        "last_updated": last_updated,
+        "mode": "local_sqlite",
+    }
+
+
+def _local_prices_payload(symbols: str = "BTCUSD,SPX,XAUUSD", points: int = 18) -> Dict[str, Any]:
+    aliases = {"BTCUSD": "BTC-USD", "SPX": "SPY", "XAUUSD": "GC=F"}
+    requested = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
+    ordered = [symbol for symbol in requested if symbol in PRICE_PANEL_META] or list(PRICE_PANEL_META.keys())
+    local_symbols = [aliases.get(symbol, symbol) for symbol in ordered]
+    rows = _local_query(
+        """
+        SELECT symbol, price, captured_at
+        FROM price_snapshots
+        WHERE symbol IN ({})
+        ORDER BY symbol ASC, captured_at DESC
+        """.format(",".join("?" for _ in local_symbols)),
+        tuple(local_symbols),
+    ) if local_symbols else []
+    max_points = max(2, min(int(points or 18), 60))
+    history_by_symbol: Dict[str, List[Dict[str, Any]]] = {symbol: [] for symbol in ordered}
+    reverse_aliases = {value: key for key, value in aliases.items()}
+    for row in rows:
+        local_symbol = str(row.get("symbol") or "").upper()
+        dashboard_symbol = reverse_aliases.get(local_symbol, local_symbol)
+        if dashboard_symbol in history_by_symbol and len(history_by_symbol[dashboard_symbol]) < max_points:
+            history_by_symbol[dashboard_symbol].append({"price": row.get("price"), "ts": row.get("captured_at")})
+    payload = []
+    for ticker in ordered:
+        history = list(reversed(history_by_symbol.get(ticker, [])))
+        latest = history[-1] if history else {}
+        previous = history[-2] if len(history) > 1 else latest
+        direction_label = "flat"
+        if latest.get("price") is not None and previous.get("price") is not None:
+            if float(latest["price"]) > float(previous["price"]):
+                direction_label = "up"
+            elif float(latest["price"]) < float(previous["price"]):
+                direction_label = "down"
+        payload.append(
+            {
+                "symbol": ticker,
+                "label": PRICE_PANEL_META[ticker]["label"],
+                "name": PRICE_PANEL_META[ticker]["name"],
+                "price": latest.get("price"),
+                "last_fetch_time": latest.get("ts", ""),
+                "direction": direction_label,
+                "sparkline": [float(item.get("price") or 0.0) for item in history if item.get("price") is not None],
+            }
+        )
+    return {"status": "ok", "prices": payload, "captured_at": datetime.now(timezone.utc).isoformat(), "mode": "local_sqlite"}
+
+
+def _local_news_payload(limit: int = 20) -> Dict[str, Any]:
+    rows = _local_query(
+        """
+        SELECT id, headline, source_name, url, summary, fetched_at, published_at
+        FROM ingested_articles
+        ORDER BY COALESCE(fetched_at, published_at, '') DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit or 20), 100)),),
+    )
+    news = []
+    for row in rows:
+        news.append(
+            {
+                "id": row.get("id"),
+                "headline": row.get("headline"),
+                "source": row.get("source_name"),
+                "url": row.get("url"),
+                "sentiment": "unknown",
+                "confidence": 0,
+                "reason": str(row.get("summary") or "")[:240],
+                "ts": row.get("fetched_at") or row.get("published_at") or "",
+            }
+        )
+    return {"status": "ok", "news": news, "mode": "local_sqlite"}
+
+
+def _local_briefing_payload() -> Dict[str, Any]:
+    rows = _local_query(
+        """
+        SELECT briefing_text, generated_at
+        FROM agent_briefings
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """
+    )
+    if rows:
+        text = str(rows[0].get("briefing_text") or "")
+        generated_at = str(rows[0].get("generated_at") or datetime.now(timezone.utc).isoformat())
+    else:
+        top = _local_latest_signals(limit=5)
+        bullets = [f"- {item['signal_name']} ({item['confidence']}% confidence)" for item in top]
+        text = "GeoClaw local briefing fallback.\n\n" + ("\n".join(bullets) if bullets else "No active thesis signals available.")
+        generated_at = datetime.now(timezone.utc).isoformat()
+    return {"status": "ok", "briefing": text, "generated_at": generated_at, "mode": "local_sqlite"}
+
+
 @app.on_event("startup")
 def _startup():
     try:
@@ -256,6 +412,17 @@ def spa_signals():
 @app.get("/bias")
 def api_bias():
     try:
+        if _local_sqlite_mode():
+            active_rows = _local_latest_signals(limit=30)
+            last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "cycle": {"signal_count": len(active_rows), "last_updated": last_updated},
+                    **_signal_bias_payload(active_rows),
+                    "mode": "local_sqlite",
+                }
+            )
         _require_db()
         active_rows = _latest_signal_cycle_rows()
         last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
@@ -282,6 +449,12 @@ def spa_subscribe():
 @app.get("/api/signals")
 def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""):
     try:
+        if _local_sqlite_mode():
+            signals = _local_latest_signals(limit=max(1, min(int(limit or 500), 5000)))
+            clean_direction = str(direction or "").strip().upper()
+            if clean_direction in {"BUY", "SELL", "HOLD"}:
+                signals = [item for item in signals if str(item.get("direction") or "").upper() == clean_direction]
+            return JSONResponse({"status": "ok", "signals": signals, "mode": "local_sqlite"})
         _require_db()
         where_parts = []
         params: List[Any] = []
@@ -312,6 +485,8 @@ def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""
 @app.get("/api/dashboard/overview")
 def api_dashboard_overview():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse(_local_dashboard_overview_payload())
         _require_db()
         active_rows = _latest_signal_cycle_rows()
         grouped = group_signals(active_rows)
@@ -333,6 +508,8 @@ def api_dashboard_overview():
 @app.get("/api/prices")
 def api_prices(symbols: str = "BTCUSD,SPX,XAUUSD", points: int = 18):
     try:
+        if _local_sqlite_mode():
+            return JSONResponse(_local_prices_payload(symbols=symbols, points=points))
         _require_db()
         requested = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
         ordered = [symbol for symbol in requested if symbol in PRICE_PANEL_META] or list(PRICE_PANEL_META.keys())
@@ -389,6 +566,8 @@ def api_prices(symbols: str = "BTCUSD,SPX,XAUUSD", points: int = 18):
 @app.get("/api/macro")
 def api_macro():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse({"status": "ok", "macro": [], "mode": "local_sqlite"})
         _require_db()
         rows = query_all(
             """
@@ -409,6 +588,8 @@ def api_macro():
 @app.get("/api/charts")
 def api_charts():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse({"status": "ok", "charts": [], "mode": "local_sqlite"})
         _require_db()
         since = datetime.now(timezone.utc) - timedelta(days=7)
         rows = query_all(
@@ -432,6 +613,8 @@ def api_charts():
 @app.get("/api/news")
 def api_news():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse(_local_news_payload(limit=20))
         _require_db()
         since = datetime.now(timezone.utc) - timedelta(hours=24)
         rows = query_all(
@@ -455,6 +638,14 @@ def api_news():
 @app.get("/api/scenarios")
 def api_scenarios():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "scenarios": "Local SQLite mode: scenario data is unavailable until the Postgres intelligence tables are configured.",
+                    "mode": "local_sqlite",
+                }
+            )
         _require_db()
         macro_rows = query_all(
             """
@@ -476,6 +667,8 @@ def api_scenarios():
 @app.get("/api/briefing")
 def api_briefing():
     try:
+        if _local_sqlite_mode():
+            return JSONResponse(_local_briefing_payload())
         _require_db()
         since = datetime.now(timezone.utc) - timedelta(hours=48)
         signals = query_all(
@@ -516,6 +709,8 @@ def api_briefing():
 def _macro_bias_score() -> float:
     """Rough -1 bearish to +1 bullish from last 24h signals."""
     try:
+        if _local_sqlite_mode():
+            return 0.0
         since = datetime.now(timezone.utc) - timedelta(hours=24)
         rows = query_all(
             "SELECT direction, confidence FROM geoclaw_signals WHERE ts >= %s;",
@@ -543,7 +738,8 @@ def _macro_bias_score() -> float:
 @app.post("/api/portfolio")
 async def api_portfolio(request: Request):
     try:
-        _require_db()
+        if not _local_sqlite_mode():
+            _require_db()
         raw = await request.body()
         payload = json.loads(raw.decode("utf-8") or "[]")
         tickers: List[str] = []
@@ -674,6 +870,38 @@ async def api_stream(request: Request):
             if await request.is_disconnected():
                 break
             try:
+                if _local_sqlite_mode():
+                    overview = _local_dashboard_overview_payload()
+                    price_payload = _local_prices_payload()
+                    data = {
+                        "signals": [
+                            {
+                                "name": str(r.get("signal_name") or ""),
+                                "direction": str(r.get("direction") or ""),
+                                "confidence": float(r.get("confidence") or 0.0),
+                                "ts": str(r.get("ts") or ""),
+                            }
+                            for r in overview.get("signals", [])
+                        ],
+                        "prices": [
+                            {
+                                "ticker": str(r.get("symbol") or ""),
+                                "price": float(r.get("price") or 0.0),
+                                "ts": str(r.get("last_fetch_time") or ""),
+                            }
+                            for r in price_payload.get("prices", [])
+                        ],
+                        "mode": "local_sqlite",
+                    }
+                    data_hash = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+                    if data_hash == _last_hash:
+                        yield ": keepalive\n\n"
+                    else:
+                        _last_hash = data_hash
+                        data["ts"] = datetime.now(timezone.utc).isoformat()
+                        yield f"data: {json.dumps(data)}\n\n"
+                    await asyncio.sleep(_SSE_INTERVAL)
+                    continue
                 _require_db()
                 signal_rows = query_all(
                     """

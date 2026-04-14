@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import urllib.request
+import re
 from typing import List
 from xml.etree import ElementTree as ET
 
@@ -21,6 +22,14 @@ DEFAULT_SOCIAL_FEEDS = [
     {"name": "Reddit r/investing", "url": "https://www.reddit.com/r/investing/.rss"},
 ]
 
+LOW_SIGNAL_TITLE_PATTERNS = (
+    re.compile(r"\b(live|discussion|daily|weekly)\s+thread\b", re.IGNORECASE),
+    re.compile(r"\b(daily|weekly)\b.*\bthread\b", re.IGNORECASE),
+    re.compile(r"\bmega\s*thread\b", re.IGNORECASE),
+    re.compile(r"^\s*\[meta\]", re.IGNORECASE),
+    re.compile(r"\bscam reminder\b", re.IGNORECASE),
+)
+
 
 class SocialMediaSource(NewsSource):
     """Public social/news RSS intake for agentic discovery without API keys."""
@@ -38,15 +47,17 @@ class SocialMediaSource(NewsSource):
         if cached_items:
             return self.unique(cached_items)[:max_records]
 
-        all_items: List[RawArticle] = []
+        feed_batches: list[List[RawArticle]] = []
         for feed in self.feeds:
             try:
                 xml_text = self._fetch_xml(feed["url"])
-                all_items.extend(self._parse_feed(xml_text, feed["name"]))
+                parsed = self._parse_feed(xml_text, feed["name"])
+                if parsed:
+                    feed_batches.append(parsed)
             except Exception as exc:
                 print(f"SocialMediaSource warning [{feed['name']}]: {exc}")
 
-        unique_items = self.unique(all_items)
+        unique_items = self.unique(self._interleave(feed_batches))
         self._write_cache(unique_items)
         return unique_items[:max_records]
 
@@ -69,7 +80,7 @@ class SocialMediaSource(NewsSource):
             link = clean_text(node.findtext("link", ""))
             pub = clean_text(node.findtext("pubDate", ""))
             desc = clean_text(node.findtext("description", ""))
-            if title and link:
+            if title and link and not self._is_low_signal_title(title):
                 items.append(self._article(source_name, title, link, pub, desc))
 
         if items:
@@ -94,7 +105,7 @@ class SocialMediaSource(NewsSource):
                 if href and (not rel or rel == "alternate"):
                     link = href
                     break
-            if title and link:
+            if title and link and not self._is_low_signal_title(title):
                 items.append(self._article(source_name, title, link, pub, summary))
         return items
 
@@ -123,3 +134,18 @@ class SocialMediaSource(NewsSource):
     @classmethod
     def _write_cache(cls, items: List[RawArticle]):
         cls._cache = {"fetched_at": time.time(), "items": list(items or [])}
+
+    @staticmethod
+    def _is_low_signal_title(title: str) -> bool:
+        clean = str(title or "")
+        return any(pattern.search(clean) for pattern in LOW_SIGNAL_TITLE_PATTERNS)
+
+    @staticmethod
+    def _interleave(batches: list[List[RawArticle]]) -> List[RawArticle]:
+        items: List[RawArticle] = []
+        max_len = max((len(batch) for batch in batches), default=0)
+        for index in range(max_len):
+            for batch in batches:
+                if index < len(batch):
+                    items.append(batch[index])
+        return items
