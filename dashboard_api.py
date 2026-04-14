@@ -34,6 +34,8 @@ except Exception:
 from intelligence.db import ensure_intelligence_schema, get_database_url, query_all
 from intelligence.groq_briefing import build_signals_context, generate_dashboard_briefing
 from intelligence.scenario_engine import generate_scenarios
+from services.price_normalizer import CANONICAL_INSTRUMENTS, normalize_candle_timestamp, normalize_quote, parse_utc_datetime
+from services.tradingview_client import TradingViewClient
 from services.signal_taxonomy import SIGNAL_SECTION_ORDER, enrich_signal_row, group_signals
 
 app = FastAPI(title="GeoClaw Dashboard API", version="1.0.0")
@@ -112,7 +114,7 @@ async def _auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 PRICE_PANEL_META = {
-    "JP225": {"label": "JP225", "name": "Japan 225 CFD"},
+    "JP225": {"label": "JP225", "name": CANONICAL_INSTRUMENTS["JP225"]["name"]},
 }
 
 STRIPE_TIERS = {
@@ -301,7 +303,8 @@ def _local_prices_payload(symbols: str = "JP225", points: int = 18) -> Dict[str,
     local_symbols = [aliases.get(symbol, symbol) for symbol in ordered]
     rows = _local_query(
         """
-        SELECT symbol, price, captured_at
+        SELECT symbol, price, captured_at, source, source_symbol,
+               quote_timestamp, quote_minute, bid, ask, last
         FROM price_snapshots
         WHERE symbol IN ({})
         ORDER BY symbol ASC, captured_at DESC
@@ -315,11 +318,44 @@ def _local_prices_payload(symbols: str = "JP225", points: int = 18) -> Dict[str,
         local_symbol = str(row.get("symbol") or "").upper()
         dashboard_symbol = reverse_aliases.get(local_symbol, local_symbol)
         if dashboard_symbol in history_by_symbol and len(history_by_symbol[dashboard_symbol]) < max_points:
-            history_by_symbol[dashboard_symbol].append({"price": row.get("price"), "ts": row.get("captured_at")})
+            history_by_symbol[dashboard_symbol].append({
+                "price": row.get("price"),
+                "ts": row.get("captured_at"),
+                "source": row.get("source"),
+                "source_symbol": row.get("source_symbol"),
+                "quote_timestamp": row.get("quote_timestamp"),
+                "quote_minute": row.get("quote_minute"),
+                "bid": row.get("bid"),
+                "ask": row.get("ask"),
+                "last": row.get("last"),
+            })
     payload = []
     for ticker in ordered:
         history = list(reversed(history_by_symbol.get(ticker, [])))
         latest = history[-1] if history else {}
+        if latest:
+            latest_source = latest.get("source")
+            latest_source_symbol = latest.get("source_symbol")
+            if latest_source or latest_source_symbol:
+                filtered_history = [
+                    item for item in history
+                    if item.get("source") == latest_source
+                    and item.get("source_symbol") == latest_source_symbol
+                ]
+                if filtered_history:
+                    history = filtered_history
+                    latest = history[-1]
+            latest_quote_ts = latest.get("quote_timestamp")
+            if latest_quote_ts:
+                latest_quote_dt = parse_utc_datetime(latest_quote_ts)
+                recent_same_minute_family = [
+                    item for item in history
+                    if item.get("quote_timestamp")
+                    and abs((latest_quote_dt - parse_utc_datetime(item.get("quote_timestamp"))).total_seconds()) <= 7200
+                ]
+                if recent_same_minute_family:
+                    history = recent_same_minute_family
+                    latest = history[-1]
         previous = history[-2] if len(history) > 1 else latest
         direction_label = "flat"
         if latest.get("price") is not None and previous.get("price") is not None:
@@ -334,6 +370,13 @@ def _local_prices_payload(symbols: str = "JP225", points: int = 18) -> Dict[str,
                 "name": PRICE_PANEL_META[ticker]["name"],
                 "price": latest.get("price"),
                 "last_fetch_time": latest.get("ts", ""),
+                "source": latest.get("source") or _JP225_LIVE_SOURCE["source"],
+                "source_symbol": latest.get("source_symbol") or aliases.get(ticker, ticker),
+                "quote_timestamp": latest.get("quote_timestamp") or latest.get("ts", ""),
+                "quote_minute": latest.get("quote_minute") or "",
+                "bid": latest.get("bid"),
+                "ask": latest.get("ask"),
+                "last": latest.get("last") if latest.get("last") is not None else latest.get("price"),
                 "direction": direction_label,
                 "sparkline": [float(item.get("price") or 0.0) for item in history if item.get("price") is not None],
             }
@@ -618,29 +661,81 @@ def api_charts():
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
+_news_cache: Dict[str, Any] = {"news": [], "ts": 0}
+
 @app.get("/api/news")
 def api_news():
+    """Fetch live Japan/market news from RSS + web search. Cached 2 min."""
+    import time as _time
+    now = _time.time()
+    if now - _news_cache["ts"] < 120 and _news_cache["news"]:
+        return JSONResponse({"status": "ok", "news": _news_cache["news"]})
+    news: List[Dict[str, Any]] = []
+    seen: set = set()
+    # 1. Live RSS
     try:
-        if _local_sqlite_mode():
-            return JSONResponse(_local_news_payload(limit=20))
-        _require_db()
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
-        rows = query_all(
-            """
-            SELECT id, headline, source, url, sentiment, confidence, reason, ts
-            FROM news_signals
-            WHERE ts >= %s
-            ORDER BY confidence DESC, ts DESC
-            LIMIT 20;
-            """,
-            (since,),
+        from sources.rss_client import RSSSource
+        rss = RSSSource()
+        for a in rss.fetch()[:15]:
+            h = str(getattr(a, "headline", "") or "").strip()
+            if not h or h in seen:
+                continue
+            seen.add(h)
+            news.append({
+                "id": len(news) + 1,
+                "headline": h,
+                "source": str(getattr(a, "source", "") or "RSS"),
+                "url": str(getattr(a, "url", "") or ""),
+                "sentiment": "unknown",
+                "confidence": 0,
+                "reason": str(getattr(a, "summary", "") or "")[:200],
+                "ts": str(getattr(a, "published_at", "") or datetime.now(timezone.utc).isoformat()),
+            })
+    except Exception:
+        pass
+    # 2. DuckDuckGo search for Nikkei 225 news
+    try:
+        import re
+        from html import unescape
+        resp = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": "Nikkei 225 Japan stock market today"},
+            headers={"User-Agent": "GeoClaw/1.0"},
+            timeout=8,
         )
-        for r in rows:
-            if r.get("ts"):
-                r["ts"] = r["ts"].isoformat()
-        return JSONResponse({"status": "ok", "news": rows})
-    except Exception as exc:
-        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+        blocks = re.findall(
+            r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</span>',
+            resp.text, re.DOTALL
+        )
+        for url_raw, title_raw, snippet_raw in blocks[:8]:
+            title = re.sub(r'<[^>]+>', '', unescape(title_raw)).strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            url_match = re.search(r'uddg=([^&]+)', url_raw)
+            url = requests.utils.unquote(url_match.group(1)) if url_match else url_raw
+            news.append({
+                "id": len(news) + 1,
+                "headline": title[:200],
+                "source": "Web Search",
+                "url": url[:500],
+                "sentiment": "unknown",
+                "confidence": 0,
+                "reason": re.sub(r'<[^>]+>', '', unescape(snippet_raw)).strip()[:200],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+    except Exception:
+        pass
+    # 3. Fallback to DB if nothing came back
+    if not news:
+        try:
+            db_result = _local_news_payload(limit=15)
+            news = db_result.get("news", [])
+        except Exception:
+            pass
+    _news_cache["news"] = news[:20]
+    _news_cache["ts"] = now
+    return JSONResponse({"status": "ok", "news": news[:20]})
 
 
 @app.get("/api/scenarios")
@@ -974,53 +1069,381 @@ async def api_stream(request: Request):
 # Live JP225 price endpoint
 # ---------------------------------------------------------------------------
 
-_jp225_candles_cache: Dict[str, Any] = {"candles": [], "ts": 0}
+_jp225_candles_cache: Dict[str, Any] = {}
+_jp225_context_cache: Dict[str, Any] = {"articles": [], "ts": 0}
+_JP225_INTERVALS = {
+    "1": {"label": "1m", "seconds": 60, "count": 60},
+    "1m": {"label": "1m", "seconds": 60, "count": 60},
+    "30": {"label": "30m", "seconds": 1800, "count": 60},
+    "30m": {"label": "30m", "seconds": 1800, "count": 60},
+    "60": {"label": "1h", "seconds": 3600, "count": 60},
+    "1h": {"label": "1h", "seconds": 3600, "count": 60},
+}
+_CANONICAL_LIVE_SOURCE = (os.environ.get("GEOCLAW_CANONICAL_LIVE_SOURCE", "tradingview") or "tradingview").strip().lower()
+if _CANONICAL_LIVE_SOURCE not in {"tradingview", "tv", "forexcom", "yahoo", "yahoo_finance"}:
+    _CANONICAL_LIVE_SOURCE = "tradingview"
+_JP225_LIVE_SOURCE = dict(CANONICAL_INSTRUMENTS["JP225"])
+_JP225_LIVE_SOURCE["stale_after_seconds"] = int(os.environ.get("GEOCLAW_LIVE_STALE_AFTER_SECONDS", "120") or 120)
+_tradingview_client = TradingViewClient()
+
+
+def _normalise_jp225_interval(interval: str = "1") -> Dict[str, Any]:
+    clean = str(interval or "1").strip().lower()
+    meta = dict(_JP225_INTERVALS.get(clean) or _JP225_INTERVALS["1"])
+    meta["tv_interval"] = "1" if meta["label"] == "1m" else ("30" if meta["label"] == "30m" else "60")
+    return meta
+
+
+def _interval_quote_bucket(value: Any, interval_meta: Dict[str, Any]) -> Dict[str, str]:
+    dt = parse_utc_datetime(value)
+    seconds = int(interval_meta.get("seconds") or 60)
+    if seconds >= 3600:
+        bucket = dt.replace(minute=0, second=0, microsecond=0)
+    elif seconds >= 1800:
+        bucket = dt.replace(minute=(dt.minute // 30) * 30, second=0, microsecond=0)
+    else:
+        bucket = dt.replace(second=0, microsecond=0)
+    return {"quote_timestamp": dt.isoformat(), "quote_minute": bucket.isoformat()}
+
+
+def _append_jp225_candle(quote: Dict[str, Any], interval_meta: Dict[str, Any], *, open_price: float = 0.0, day_high: float = 0.0, day_low: float = 0.0) -> List[Dict[str, Any]]:
+    """Keep a tiny same-source candle cache from live scanner quotes."""
+    cache_key = str(interval_meta["tv_interval"])
+    cache = _jp225_candles_cache.setdefault(cache_key, {"candles": [], "source": ""})
+    price = float(quote["price"])
+    bucket = _interval_quote_bucket(quote["quote_timestamp"], interval_meta)
+    candle = {
+        "t": bucket["quote_minute"],
+        "quote_timestamp": quote["quote_timestamp"],
+        "quote_minute": bucket["quote_minute"],
+        "o": round(float(open_price or price), 2),
+        "h": round(float(day_high or price), 2),
+        "l": round(float(day_low or price), 2),
+        "c": round(price, 2),
+    }
+    candles = cache.get("candles") or []
+    if candles and candles[-1].get("quote_minute") == candle["quote_minute"]:
+        prev = candles[-1]
+        candle["o"] = prev.get("o", candle["o"])
+        candle["h"] = max(float(prev.get("h", candle["h"])), candle["h"])
+        candle["l"] = min(float(prev.get("l", candle["l"])), candle["l"])
+        candles[-1] = candle
+    else:
+        candles.append(candle)
+    cache["candles"] = candles[-60:]
+    cache["ts"] = datetime.now(timezone.utc).timestamp()
+    cache["quote_timestamp"] = quote["quote_timestamp"]
+    cache["source"] = quote["source"]
+    return cache["candles"]
+
+
+def _merge_quote_into_jp225_bars(candles: List[Dict[str, Any]], quote: Dict[str, Any], interval_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Align the latest quote with real TradingView bars without inventing history."""
+    if not candles:
+        return _append_jp225_candle(quote, interval_meta)
+
+    candles = [dict(c) for c in candles[-60:]]
+    price = float(quote["price"])
+    bucket = _interval_quote_bucket(quote["quote_timestamp"], interval_meta)
+    quote_minute = bucket["quote_minute"]
+    if candles[-1].get("quote_minute") == quote_minute:
+        last = candles[-1]
+        last["quote_timestamp"] = quote["quote_timestamp"]
+        last["h"] = round(max(float(last.get("h", price)), price), 2)
+        last["l"] = round(min(float(last.get("l", price)), price), 2)
+        last["c"] = round(price, 2)
+    else:
+        candles.append({
+            "t": quote_minute,
+            "quote_timestamp": quote["quote_timestamp"],
+            "quote_minute": quote_minute,
+            "o": round(price, 2),
+            "h": round(price, 2),
+            "l": round(price, 2),
+            "c": round(price, 2),
+        })
+
+    cache_key = str(interval_meta["tv_interval"])
+    cache = _jp225_candles_cache.setdefault(cache_key, {"candles": [], "source": ""})
+    cache["candles"] = candles[-60:]
+    cache["ts"] = datetime.now(timezone.utc).timestamp()
+    cache["quote_timestamp"] = quote["quote_timestamp"]
+    cache["source"] = quote["source"]
+    return cache["candles"]
+
+
+def _get_jp225_bars_cached(symbol: str, interval_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
+    now_ts = datetime.now(timezone.utc).timestamp()
+    cache_key = str(interval_meta["tv_interval"])
+    cache = _jp225_candles_cache.setdefault(cache_key, {"candles": [], "source": ""})
+    cached = cache.get("candles") or []
+    # Fetch full OHLC history at most once per minute. The latest in-progress
+    # candle is still refreshed every 2s by merging in the live quote.
+    if cached and cache.get("source") == "TradingView" and now_ts - float(cache.get("bars_ts") or 0) < 55:
+        return list(cached[-int(interval_meta["count"]):])
+    bars = _tradingview_client.fetch_bars(symbol, interval=str(interval_meta["tv_interval"]), count=int(interval_meta["count"]))
+    if bars:
+        cache["candles"] = bars[-int(interval_meta["count"]):]
+        cache["bars_ts"] = now_ts
+        cache["quote_timestamp"] = bars[-1].get("quote_timestamp", "")
+        cache["source"] = "TradingView"
+    return bars[-int(interval_meta["count"]):] if bars else list(cached[-int(interval_meta["count"]):])
+
+
+def _fetch_jp225_context_articles() -> List[Dict[str, Any]]:
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if _jp225_context_cache.get("articles") and now_ts - float(_jp225_context_cache.get("ts") or 0) < 600:
+        return list(_jp225_context_cache["articles"])
+
+    query = "Nikkei 225 today rise oil US Iran talks Japan stocks"
+    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode({
+        "q": query,
+        "hl": "en-US",
+        "gl": "US",
+        "ceid": "US:en",
+    })
+    articles: List[Dict[str, Any]] = []
+    try:
+        response = requests.get(url, headers={"User-Agent": "GeoClaw/1.0"}, timeout=8)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        for item in root.findall("./channel/item")[:8]:
+            title = str(item.findtext("title") or "").strip()
+            if not title:
+                continue
+            articles.append({
+                "title": title,
+                "source": str(item.findtext("source") or "Google News").strip(),
+                "url": str(item.findtext("link") or "").strip(),
+                "published_at": str(item.findtext("pubDate") or "").strip(),
+            })
+    except Exception:
+        articles = []
+
+    _jp225_context_cache["articles"] = articles
+    _jp225_context_cache["ts"] = now_ts
+    return articles
+
+
+def _build_jp225_market_context(quote: Dict[str, Any]) -> Dict[str, Any]:
+    articles = _fetch_jp225_context_articles()
+    text = " ".join(str(a.get("title") or "") for a in articles).lower()
+    change_pct = float(quote.get("change_pct") or 0.0)
+
+    drivers: List[Dict[str, Any]] = []
+    if any(term in text for term in ("iran", "oil", "ceasefire", "talks")):
+        drivers.append({
+            "label": "Geopolitical relief / oil easing",
+            "impact": "bullish",
+            "score": 85,
+            "why": "Today’s news flow links Asia equity strength with hopes for renewed US-Iran talks and lower oil risk, which is supportive for import-heavy Japan.",
+        })
+    if any(term in text for term in ("global shares", "stocks rise", "asian markets", "kospi", "gain")):
+        drivers.append({
+            "label": "Regional risk-on tape",
+            "impact": "bullish",
+            "score": 72,
+            "why": "Asia/global equity headlines are broadly positive, so JP225 is moving with the wider risk-on session rather than as an isolated signal.",
+        })
+    if any(term in text for term in ("yen", "dollar", "exporter", "usd")):
+        drivers.append({
+            "label": "JPY/exporter sensitivity",
+            "impact": "watch",
+            "score": 55,
+            "why": "JPY direction matters for Japanese exporters; a softer yen usually helps index sentiment, while a sharp yen rally can pressure it.",
+        })
+    if not drivers:
+        drivers.append({
+            "label": "Confirmed price momentum",
+            "impact": "bullish" if change_pct > 0 else ("bearish" if change_pct < 0 else "neutral"),
+            "score": min(90, max(20, int(abs(change_pct) * 35))),
+            "why": "The same-source FOREXCOM quote is positive, but the news driver feed did not return a clean single explanation yet.",
+        })
+
+    sensitivity = [
+        {
+            "factor": "US-Iran / oil shock risk",
+            "score": 85 if any(term in text for term in ("iran", "oil", "talks")) else 55,
+            "current_signal": "supportive" if any(term in text for term in ("talks", "oil falls", "oil prices ease")) else "watch",
+            "why": "Lower oil/geopolitical risk tends to support Japan; renewed escalation would be bearish.",
+        },
+        {
+            "factor": "JPY strength",
+            "score": -70,
+            "current_signal": "risk if yen rallies",
+            "why": "A stronger yen usually pressures exporter-heavy Japanese equities.",
+        },
+        {
+            "factor": "Global risk appetite",
+            "score": 65 if any(term in text for term in ("global shares", "stocks rise", "asian markets", "gain")) else 45,
+            "current_signal": "supportive",
+            "why": "JP225 often follows broad Asia/US equity risk sentiment.",
+        },
+        {
+            "factor": "US rates / BOJ hawkishness",
+            "score": -45,
+            "current_signal": "macro watch",
+            "why": "Rising discount rates or hawkish policy can pressure valuation-sensitive equities.",
+        },
+        {
+            "factor": "Tech / semiconductor cycle",
+            "score": 50,
+            "current_signal": "watch",
+            "why": "Japanese index leadership is sensitive to global tech and chip appetite.",
+        },
+    ]
+
+    summary = (
+        f"JP225 is positive on the same-source FOREXCOM feed (+{change_pct:.2f}%). "
+        "The cleanest news-backed explanation is risk-on Asia sentiment tied to US-Iran talk hopes and easier oil-risk pressure."
+        if change_pct >= 0
+        else f"JP225 is negative on the same-source FOREXCOM feed ({change_pct:.2f}%). Watch whether news drivers confirm the move."
+    )
+
+    return {
+        "title": "Why JP225 is moving today",
+        "summary": summary,
+        "drivers": drivers[:3],
+        "articles": articles[:5],
+        "sensitivity": sensitivity,
+        "disclaimer": "Market context only — not investment advice. Use confirmed source, timeframe, risk, and your own plan before trading.",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _jp225_json_payload(quote: Dict[str, Any], candles: List[Dict[str, Any]], *, interval_meta: Dict[str, Any], open_price: float, day_high: float, day_low: float, prev_close: float, is_proxy: bool, source_status: str = "", fallback_reason: str = "") -> JSONResponse:
+    payload = {
+        "symbol": "JP225",
+        "name": quote["name"],
+        "source": quote["source"],
+        "source_symbol": quote["source_symbol"],
+        "comparison_symbol": quote["comparison_symbol"],
+        "session": quote["session"],
+        "market_type": quote["market_type"],
+        "price_basis": quote["price_basis"],
+        "change_basis": quote["change_basis"],
+        "quote_timestamp": quote["quote_timestamp"],
+        "quote_minute": quote["quote_minute"],
+        "quote_age_seconds": quote["quote_age_seconds"],
+        "stale_after_seconds": quote["stale_after_seconds"],
+        "is_stale": quote["is_stale"],
+        "freshness": quote["freshness"],
+        "is_proxy": is_proxy,
+        "source_status": source_status,
+        "fallback_reason": fallback_reason,
+        "price": round(quote["price"], 2),
+        "last": round(quote["last"], 2),
+        "bid": quote["bid"],
+        "ask": quote["ask"],
+        "change": round(quote["change"], 2),
+        "change_pct": quote["change_pct"],
+        "prev_close": round(prev_close, 2),
+        "open": round(open_price, 2),
+        "day_high": round(day_high, 2),
+        "day_low": round(day_low, 2),
+        "direction": quote["direction"],
+        "candles": candles[-60:],
+        "chart_basis": {
+            "source": quote["source"],
+            "source_symbol": quote["source_symbol"],
+            "interval": interval_meta["label"],
+            "bars": len(candles[-60:]),
+            "note": f"Same-source TradingView FOREXCOM {interval_meta['label']} OHLC bars.",
+        },
+        "market_context": _build_jp225_market_context(quote),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    return JSONResponse(payload)
 
 @app.get("/api/live/jp225")
-def api_live_jp225():
-    """Fetch live JP225 price + intraday OHLCV (1-minute bars, cached 30s)."""
+def api_live_jp225(interval: str = "1"):
+    """Fetch the canonical dashboard JP225 feed on a selected candle basis."""
     try:
         import time
+        interval_meta = _normalise_jp225_interval(interval)
+
+        if _CANONICAL_LIVE_SOURCE in {"tradingview", "tv", "forexcom"}:
+            tv_quote = _tradingview_client.fetch_quote(str(_JP225_LIVE_SOURCE.get("provider_symbol") or "TVC:NI225"))
+            if tv_quote:
+                quote = normalize_quote(
+                    "JP225",
+                    tv_quote["price"],
+                    tv_quote["quote_timestamp"],
+                    previous_close=tv_quote.get("previous_close"),
+                    bid=tv_quote.get("bid"),
+                    ask=tv_quote.get("ask"),
+                    last=tv_quote.get("price"),
+                    stale_after_seconds=int(_JP225_LIVE_SOURCE["stale_after_seconds"]),
+                )
+                candles = _get_jp225_bars_cached(str(_JP225_LIVE_SOURCE.get("provider_symbol") or "FOREXCOM:JP225"), interval_meta)
+                candles = _merge_quote_into_jp225_bars(candles, quote, interval_meta)
+                return _jp225_json_payload(
+                    quote,
+                    candles,
+                    interval_meta=interval_meta,
+                    open_price=float(tv_quote.get("open") or 0.0),
+                    day_high=float(tv_quote.get("day_high") or quote["price"]),
+                    day_low=float(tv_quote.get("day_low") or quote["price"]),
+                    prev_close=float(tv_quote.get("previous_close") or 0.0),
+                    is_proxy=False,
+                    source_status=str(tv_quote.get("market_session") or tv_quote.get("update_mode") or ""),
+                )
+
         import yfinance as yf
-        ticker = yf.Ticker("^N225")
+        yahoo_source = dict(CANONICAL_INSTRUMENTS["JP225_YAHOO"])
+        ticker = yf.Ticker(yahoo_source["source_symbol"])
         info = ticker.fast_info
-        price = float(info.last_price or 0)
         prev_close = float(info.previous_close or 0)
         open_price = float(info.open or 0)
-        change = price - prev_close if prev_close else 0
-        change_pct = (change / prev_close * 100) if prev_close else 0
-        # 1-minute candles — refresh only every 30s to keep price tick fast
+        # Fallback candles use their own cache key because the TradingView path
+        # stores one cache bucket per selected dashboard interval.
         now_ts = time.time()
-        if now_ts - _jp225_candles_cache["ts"] > 30:
-            hist = ticker.history(period="1d", interval="1m")
+        fallback_key = f"yahoo:{interval_meta['tv_interval']}"
+        fallback_cache = _jp225_candles_cache.setdefault(fallback_key, {"candles": [], "ts": 0, "quote_timestamp": ""})
+        yf_interval = "1m" if interval_meta["label"] == "1m" else ("30m" if interval_meta["label"] == "30m" else "60m")
+        if now_ts - float(fallback_cache.get("ts") or 0) > 30:
+            hist = ticker.history(period="1d", interval=yf_interval)
             candles = []
             for ts, row in hist.iterrows():
+                quote_time = normalize_candle_timestamp(ts)
                 candles.append({
                     "t": ts.isoformat(),
+                    "quote_timestamp": quote_time["quote_timestamp"],
+                    "quote_minute": quote_time["quote_minute"],
                     "o": round(float(row["Open"]), 2),
                     "h": round(float(row["High"]), 2),
                     "l": round(float(row["Low"]), 2),
                     "c": round(float(row["Close"]), 2),
                 })
-            _jp225_candles_cache["candles"] = candles
-            _jp225_candles_cache["ts"] = now_ts
-        candles = _jp225_candles_cache["candles"]
+            fallback_cache["candles"] = candles
+            fallback_cache["ts"] = now_ts
+            fallback_cache["quote_timestamp"] = candles[-1].get("quote_timestamp", "") if candles else ""
+        candles = fallback_cache.get("candles") or []
+        latest_candle = candles[-1] if candles else {}
+        price = float(latest_candle.get("c") or info.last_price or 0)
+        quote = normalize_quote(
+            "JP225_YAHOO",
+            price,
+            latest_candle.get("quote_timestamp"),
+            previous_close=prev_close,
+            stale_after_seconds=int(_JP225_LIVE_SOURCE["stale_after_seconds"]),
+        )
         day_high = max((c["h"] for c in candles), default=price)
         day_low = min((c["l"] for c in candles), default=price)
-        return JSONResponse({
-            "symbol": "JP225",
-            "name": "Nikkei 225 CFD",
-            "price": round(price, 2),
-            "change": round(change, 2),
-            "change_pct": round(change_pct, 2),
-            "prev_close": round(prev_close, 2),
-            "open": round(open_price, 2),
-            "day_high": round(day_high, 2),
-            "day_low": round(day_low, 2),
-            "direction": "up" if change > 0 else ("down" if change < 0 else "flat"),
-            "candles": candles[-60:],
-            "ts": datetime.now(timezone.utc).isoformat(),
-        })
+        return _jp225_json_payload(
+            quote,
+            candles,
+            interval_meta=interval_meta,
+            open_price=open_price,
+            day_high=day_high,
+            day_low=day_low,
+            prev_close=prev_close,
+            is_proxy=True,
+            fallback_reason="TradingView quote unavailable" if _CANONICAL_LIVE_SOURCE in {"tradingview", "tv", "forexcom"} else "",
+        )
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
