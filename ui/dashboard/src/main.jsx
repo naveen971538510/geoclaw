@@ -1,4 +1,5 @@
-import "@dashboard/styles.css";
-import { mountDashboardApp } from "@dashboard/bootstrap.jsx";
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
 
-mountDashboardApp();
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
