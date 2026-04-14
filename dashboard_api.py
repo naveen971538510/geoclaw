@@ -974,10 +974,13 @@ async def api_stream(request: Request):
 # Live JP225 price endpoint
 # ---------------------------------------------------------------------------
 
+_jp225_candles_cache: Dict[str, Any] = {"candles": [], "ts": 0}
+
 @app.get("/api/live/jp225")
 def api_live_jp225():
-    """Fetch live JP225 price + intraday OHLCV (1-minute bars, last 60)."""
+    """Fetch live JP225 price + intraday OHLCV (1-minute bars, cached 30s)."""
     try:
+        import time
         import yfinance as yf
         ticker = yf.Ticker("^N225")
         info = ticker.fast_info
@@ -986,17 +989,22 @@ def api_live_jp225():
         open_price = float(info.open or 0)
         change = price - prev_close if prev_close else 0
         change_pct = (change / prev_close * 100) if prev_close else 0
-        # 1-minute bars for today
-        hist = ticker.history(period="1d", interval="1m")
-        candles = []
-        for ts, row in hist.iterrows():
-            candles.append({
-                "t": ts.isoformat(),
-                "o": round(float(row["Open"]), 2),
-                "h": round(float(row["High"]), 2),
-                "l": round(float(row["Low"]), 2),
-                "c": round(float(row["Close"]), 2),
-            })
+        # 1-minute candles — refresh only every 30s to keep price tick fast
+        now_ts = time.time()
+        if now_ts - _jp225_candles_cache["ts"] > 30:
+            hist = ticker.history(period="1d", interval="1m")
+            candles = []
+            for ts, row in hist.iterrows():
+                candles.append({
+                    "t": ts.isoformat(),
+                    "o": round(float(row["Open"]), 2),
+                    "h": round(float(row["High"]), 2),
+                    "l": round(float(row["Low"]), 2),
+                    "c": round(float(row["Close"]), 2),
+                })
+            _jp225_candles_cache["candles"] = candles
+            _jp225_candles_cache["ts"] = now_ts
+        candles = _jp225_candles_cache["candles"]
         day_high = max((c["h"] for c in candles), default=price)
         day_low = min((c["l"] for c in candles), default=price)
         return JSONResponse({

@@ -58,9 +58,17 @@ export default function App() {
   const [err, setErr] = useState("");
   const [now, setNow] = useState(new Date());
   const prevPrice = useRef(null);
-  const [flash, setFlash] = useState(null); // "up" | "down"
+  const [flash, setFlash] = useState(null);
+  const [lastTick, setLastTick] = useState(null);
+  const [tickAge, setTickAge] = useState(0);
 
-  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setNow(new Date());
+      if (lastTick) setTickAge(Math.floor((Date.now() - lastTick) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [lastTick]);
 
   // Live JP225 — refresh every 15s
   const loadLive = useCallback(async () => {
@@ -69,10 +77,12 @@ export default function App() {
       if (d.error) return;
       if (prevPrice.current !== null && d.price !== prevPrice.current) {
         setFlash(d.price > prevPrice.current ? "up" : "down");
-        setTimeout(() => setFlash(null), 800);
+        setTimeout(() => setFlash(null), 600);
       }
       prevPrice.current = d.price;
       setLive(d);
+      setLastTick(Date.now());
+      setTickAge(0);
     } catch { /* silent */ }
   }, []);
 
@@ -98,7 +108,7 @@ export default function App() {
     try { const d = await api("/briefing"); setBriefing(d.briefing || ""); } catch { }
   }, []);
 
-  useEffect(() => { loadLive(); const t = setInterval(loadLive, 15000); return () => clearInterval(t); }, [loadLive]);
+  useEffect(() => { loadLive(); const t = setInterval(loadLive, 5000); return () => clearInterval(t); }, [loadLive]);
   useEffect(() => { loadOverview(); const t = setInterval(loadOverview, 60000); return () => clearInterval(t); }, [loadOverview]);
   useEffect(() => { loadNews(); const t = setInterval(loadNews, 300000); return () => clearInterval(t); }, [loadNews]);
   useEffect(() => { loadBriefing(); const t = setInterval(loadBriefing, 300000); return () => clearInterval(t); }, [loadBriefing]);
@@ -122,7 +132,10 @@ export default function App() {
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
               {now.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </div>
-            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--bull)" }} className="pulse" />
+            <div style={{ fontSize: 12, color: tickAge > 10 ? "var(--bear)" : "var(--bull)", fontVariantNumeric: "tabular-nums" }}>
+              {lastTick ? `${tickAge}s ago` : "connecting…"}
+            </div>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: tickAge > 10 ? "var(--bear)" : "var(--bull)" }} className="pulse" />
           </div>
         </div>
 
@@ -228,7 +241,7 @@ export default function App() {
         </Card>
 
         <div style={{ marginTop: 12, fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
-          Price updates every 15s · Signals every 60s · GeoClaw
+          Live price every 5s · Signals every 60s · GeoClaw
         </div>
       </div>
     </>
