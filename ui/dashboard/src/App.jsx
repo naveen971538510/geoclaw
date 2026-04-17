@@ -63,10 +63,25 @@ function Label({ children }) {
   return <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>{children}</div>;
 }
 
+const DEFAULT_INSTRUMENTS = [
+  { symbol: "JP225", label: "JP225", name: "Nikkei 225 proxy", asset_class: "index" },
+  { symbol: "USA500", label: "USA500", name: "S&P 500 proxy", asset_class: "index" },
+  { symbol: "TSLA", label: "TSLA", name: "Tesla, Inc.", asset_class: "equity" },
+  { symbol: "NVDA", label: "NVDA", name: "NVIDIA Corporation", asset_class: "equity" },
+  { symbol: "META", label: "META", name: "Meta Platforms, Inc.", asset_class: "equity" },
+  { symbol: "AMZN", label: "AMZN", name: "Amazon.com, Inc.", asset_class: "equity" },
+  { symbol: "INTC", label: "INTC", name: "Intel Corporation", asset_class: "equity" },
+  { symbol: "MU", label: "MU", name: "Micron Technology, Inc.", asset_class: "equity" },
+  { symbol: "GOLD", label: "GOLD", name: "Gold spot (XAU/USD)", asset_class: "metal" },
+  { symbol: "SILVER", label: "SILVER", name: "Silver spot (XAG/USD)", asset_class: "metal" },
+];
+
 export default function App() {
+  const [instruments, setInstruments] = useState(DEFAULT_INSTRUMENTS);
+  const [activeSymbol, setActiveSymbol] = useState("JP225");
   const [live, setLive] = useState(null);
   const [chartInterval, setChartInterval] = useState("1");
-  const [bias, setBias] = useState("—");
+  const [bias, setBias] = useState("\u2014");
   const [bullCount, setBullCount] = useState(0);
   const [bearCount, setBearCount] = useState(0);
   const [signals, setSignals] = useState([]);
@@ -88,10 +103,32 @@ export default function App() {
     return () => clearInterval(t);
   }, [lastTick]);
 
-  // Live JP225 — refresh every 2s for intraminute chart accuracy
+  // Instruments — populate the asset switcher.
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await api("/instruments");
+        if (Array.isArray(d.instruments) && d.instruments.length) {
+          setInstruments(d.instruments);
+        }
+      } catch { /* keep DEFAULT_INSTRUMENTS */ }
+    })();
+  }, []);
+
+  // Reset transient tick/flash state whenever the user switches asset so the
+  // hero card does not briefly render the previous symbol's price.
+  useEffect(() => {
+    setLive(null);
+    prevPrice.current = null;
+    setFlash(null);
+    setLastTick(null);
+    setTickAge(0);
+  }, [activeSymbol]);
+
+  // Live quote — refresh every 2s for intraminute chart accuracy.
   const loadLive = useCallback(async () => {
     try {
-      const d = await api(`/live/jp225?interval=${encodeURIComponent(chartInterval)}`);
+      const d = await api(`/live/${encodeURIComponent(activeSymbol)}?interval=${encodeURIComponent(chartInterval)}`);
       if (d.error) return;
       if (prevPrice.current !== null && d.price !== prevPrice.current) {
         setFlash(d.price > prevPrice.current ? "up" : "down");
@@ -104,7 +141,7 @@ export default function App() {
       setLastTick(safeQuoteMs);
       setTickAge(Math.max(0, Math.floor((Date.now() - safeQuoteMs) / 1000)));
     } catch { /* silent */ }
-  }, [chartInterval]);
+  }, [activeSymbol, chartInterval]);
 
   // Signals + overview — refresh every 60s
   const loadOverview = useCallback(async () => {
@@ -142,8 +179,14 @@ export default function App() {
   const biasColor = bias === "BULLISH" ? "var(--bull)" : bias === "BEARISH" ? "var(--bear)" : "var(--neutral)";
   const priceColor = live?.direction === "up" ? "var(--bull)" : live?.direction === "down" ? "var(--bear)" : "var(--text)";
   const flashBg = flash === "up" ? "#22c55e22" : flash === "down" ? "#ef444422" : "transparent";
-  const liveName = live?.name || "Nikkei 225 proxy";
-  const liveSource = live?.source_symbol ? `${live.source || "Source"} ${live.source_symbol}` : "TradingView FOREXCOM-JP225";
+  const activeInstrument = instruments.find(i => i.symbol === activeSymbol) || instruments[0] || DEFAULT_INSTRUMENTS[0];
+  const liveName = live?.name || activeInstrument?.name || activeSymbol;
+  const liveLabel = live?.symbol || activeInstrument?.label || activeSymbol;
+  const isMetal = (live?.asset_class || activeInstrument?.asset_class) === "metal";
+  const isEquity = (live?.asset_class || activeInstrument?.asset_class) === "equity";
+  const priceDigits = isMetal ? 2 : (isEquity ? 2 : 0);
+  const changeDigits = isMetal ? 2 : (isEquity ? 2 : 0);
+  const liveSource = live?.source_symbol ? `${live.source || "Source"} ${live.source_symbol}` : `TradingView ${activeInstrument?.source_symbol || activeSymbol}`;
   const chartIntervalLabel = live?.chart_basis?.interval || "1m";
   const changeBasis = live?.change_basis === "same_source_1m_candle_vs_previous_close" ? `${chartIntervalLabel} candle vs prev close` : (live?.change_basis || "live basis");
   const quoteAge = Math.max(Number(live?.quote_age_seconds ?? 0), tickAge);
@@ -161,9 +204,30 @@ export default function App() {
 
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>GeoClaw Intelligence</div>
-            <h1 style={{ margin: "2px 0 0", fontSize: 20, fontWeight: 700 }}>{liveName} · {isDelayed ? "Delayed" : "Live"}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>GeoClaw Intelligence</div>
+              <h1 style={{ margin: "2px 0 0", fontSize: 20, fontWeight: 700 }}>{liveName} · {isDelayed ? "Delayed" : "Live"}</h1>
+            </div>
+            <select
+              value={activeSymbol}
+              onChange={e => setActiveSymbol(e.target.value)}
+              aria-label="Select asset"
+              style={{
+                background: "var(--card)",
+                color: "var(--text)",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {instruments.map(inst => (
+                <option key={inst.symbol} value={inst.symbol}>{inst.label} · {inst.name}</option>
+              ))}
+            </select>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
@@ -185,11 +249,11 @@ export default function App() {
               <Label>{liveName} · {liveSource}</Label>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
                 <span style={{ fontSize: 48, fontWeight: 800, color: priceColor, fontVariantNumeric: "tabular-nums" }}>
-                  {live ? Number(live.price).toLocaleString("en-GB", { maximumFractionDigits: 0 }) : "—"}
+                  {live ? Number(live.price).toLocaleString("en-GB", { maximumFractionDigits: priceDigits }) : "\u2014"}
                 </span>
                 {live && (
                   <span style={{ fontSize: 20, fontWeight: 600, color: priceColor }}>
-                    {live.change >= 0 ? "▲" : "▼"} {Math.abs(live.change).toLocaleString("en-GB", { maximumFractionDigits: 0 })} ({live.change_pct >= 0 ? "+" : ""}{live.change_pct.toFixed(2)}%)
+                    {live.change >= 0 ? "\u25b2" : "\u25bc"} {Math.abs(live.change).toLocaleString("en-GB", { maximumFractionDigits: changeDigits })} ({live.change_pct >= 0 ? "+" : ""}{live.change_pct.toFixed(2)}%)
                   </span>
                 )}
               </div>
@@ -265,7 +329,7 @@ export default function App() {
         {live?.market_context && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
             <Card>
-              <Label>Why JP225 is positive today</Label>
+              <Label>{marketContext.title || `Why ${liveLabel} is moving today`}</Label>
               <div style={{ fontSize: 14, lineHeight: 1.55, marginBottom: 12 }}>
                 {marketContext.summary}
               </div>
