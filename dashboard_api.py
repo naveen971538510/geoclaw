@@ -679,81 +679,247 @@ def api_charts():
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
-_news_cache: Dict[str, Any] = {"news": [], "ts": 0}
+# Per-symbol news cache + keyword/query map.  The dashboard polls /api/news
+# every 30s, so a short TTL keeps the feed fresh without re-hitting RSS/DDG
+# on every request.  Each symbol has its own bucket so switching assets does
+# not force a re-fetch of unrelated headlines.
+_news_cache: Dict[str, Any] = {"buckets": {}}
+_NEWS_CACHE_TTL_SECONDS = 45
+
+# Each entry drives three things:
+#   - `query`:    the search query we send to DuckDuckGo.
+#   - `keywords`: tokens we keyword-match against RSS / DDG / DB headlines
+#                 (case-insensitive).  A headline keeps its slot if ANY
+#                 keyword is present; the list is designed to catch the
+#                 common aliases traders actually read (e.g. TSLA ↔ Tesla
+#                 ↔ Musk) without being so loose that everything matches.
+#   - `fallback_to_global`: when True, if no per-symbol headlines survive
+#                 filtering we fall back to the unfiltered firehose rather
+#                 than show an empty feed.  Kept on for every symbol so the
+#                 feed is never blank.
+NEWS_KEYWORDS: Dict[str, Dict[str, Any]] = {
+    "JP225": {
+        "query": "Nikkei 225 Japan stock market today",
+        # JP225 also includes Japanese tokens because the bundled RSS feed is
+        # JP-native (NHK, Nikkei Asia); Latin-only matching would drop it all.
+        "keywords": ["nikkei", "japan", "tokyo", "jp225", "yen", "boj",
+                     "softbank", "toyota", "日経", "日本", "東京", "円", "トヨタ", "日銀"],
+        # JP225 skips the keyword filter — the RSS firehose IS JP-specific.
+        "rss_passthrough": True,
+    },
+    "USA500": {
+        "query": "S&P 500 US stock market today",
+        "keywords": ["s&p 500", "sp500", "spx", "us stocks", "wall street",
+                     "federal reserve", "fomc", "nasdaq", "dow jones"],
+    },
+    "TSLA": {
+        "query": "Tesla TSLA stock news",
+        "keywords": ["tesla", "tsla", "musk", "cybertruck", "model y", "model 3",
+                     "robotaxi", "giga", "ev sales"],
+    },
+    "NVDA": {
+        "query": "Nvidia NVDA stock AI chips news",
+        "keywords": ["nvidia", "nvda", "jensen huang", "gpu", "ai chip",
+                     "h100", "h200", "blackwell"],
+    },
+    "META": {
+        "query": "Meta Platforms stock news",
+        "keywords": ["meta", "facebook", "instagram", "whatsapp", "reality labs",
+                     "zuckerberg", "llama"],
+    },
+    "AMZN": {
+        "query": "Amazon AMZN stock AWS news",
+        "keywords": ["amazon", "amzn", "aws", "bezos", "jassy", "prime day",
+                     "e-commerce"],
+    },
+    "INTC": {
+        "query": "Intel INTC stock semiconductor news",
+        "keywords": ["intel", "intc", "gelsinger", "foundry", "xeon", "arc gpu"],
+    },
+    "MU": {
+        "query": "Micron MU stock memory chip news",
+        "keywords": ["micron", "mu ", "dram", "nand", "hbm", "memory chip"],
+    },
+    "GOLD": {
+        "query": "gold spot price XAU today",
+        "keywords": ["gold", "xau", "bullion", "precious metal", "safe haven"],
+    },
+    "SILVER": {
+        "query": "silver spot price XAG today",
+        "keywords": ["silver", "xag", "industrial metal", "precious metal"],
+    },
+}
+
+
+def _news_symbol_meta(symbol: Optional[str]) -> Dict[str, Any]:
+    """Resolve a symbol string → canonical_key + query + keywords + flags.
+
+    Unknown / missing symbols fall back to the generic JP225 bucket so the
+    endpoint always has something sensible to show.
+    """
+    key = str(symbol or "JP225").upper().strip() or "JP225"
+    meta = NEWS_KEYWORDS.get(key)
+    if not meta:
+        key = "JP225"
+        meta = NEWS_KEYWORDS["JP225"]
+    return {
+        "symbol": key,
+        "query": meta["query"],
+        "keywords": tuple(meta["keywords"]),
+        "rss_passthrough": bool(meta.get("rss_passthrough")),
+    }
+
+
+def _news_matches_keywords(item: Dict[str, Any], keywords: tuple) -> bool:
+    if not keywords:
+        return True
+    haystack = " ".join(
+        str(item.get(k) or "") for k in ("headline", "reason", "source")
+    ).lower()
+    return any(kw.lower() in haystack for kw in keywords)
 
 @app.get("/api/news")
-def api_news():
-    """Fetch live Japan/market news from RSS + web search. Cached 2 min."""
+def api_news(symbol: Optional[str] = None):
+    """Fetch live per-asset news from RSS + web search, DB as last resort.
+
+    Query params:
+      * symbol: canonical instrument (e.g. TSLA, GOLD). Defaults to JP225.
+
+    Responses are cached per symbol for _NEWS_CACHE_TTL_SECONDS so the 30 s
+    SPA poll feels instant without re-hitting RSS/DDG on every request.
+    """
     import time as _time
+
+    meta = _news_symbol_meta(symbol)
+    sym_key = meta["symbol"]
+    keywords = meta["keywords"]
+    query = meta["query"]
+    rss_passthrough = meta["rss_passthrough"]
     now = _time.time()
-    if now - _news_cache["ts"] < 120 and _news_cache["news"]:
-        return JSONResponse({"status": "ok", "news": _news_cache["news"]})
-    news: List[Dict[str, Any]] = []
+
+    bucket = _news_cache["buckets"].get(sym_key)
+    if bucket and now - bucket.get("ts", 0) < _NEWS_CACHE_TTL_SECONDS and bucket.get("news"):
+        return JSONResponse({
+            "status": "ok",
+            "symbol": sym_key,
+            "news": bucket["news"],
+            "cached": True,
+        })
+
+    targeted: List[Dict[str, Any]] = []   # already filtered by query (Google News + DDG)
+    generic: List[Dict[str, Any]] = []    # RSS / DB firehose — needs keyword match
     seen: set = set()
-    # 1. Live RSS
+
+    def _push(bucket_list: List[Dict[str, Any]], item: Dict[str, Any]) -> None:
+        h = str(item.get("headline") or "").strip()
+        if not h or h in seen:
+            return
+        seen.add(h)
+        bucket_list.append(item)
+
+    # 1. Google News RSS — per-symbol query. Most reliable, not JP-biased.
     try:
-        from sources.rss_client import RSSSource
-        rss = RSSSource()
-        for a in rss.fetch()[:15]:
-            h = str(getattr(a, "headline", "") or "").strip()
-            if not h or h in seen:
+        import re
+        from html import unescape
+        import urllib.parse as _urlparse
+        gn_url = "https://news.google.com/rss/search?" + _urlparse.urlencode({"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+        gn_resp = requests.get(gn_url, headers={"User-Agent": "GeoClaw/1.0"}, timeout=6)
+        for block in re.findall(r"<item>(.*?)</item>", gn_resp.text, re.DOTALL)[:15]:
+            title_m = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", block, re.DOTALL)
+            link_m = re.search(r"<link>(.*?)</link>", block, re.DOTALL)
+            src_m = re.search(r"<source[^>]*>(.*?)</source>", block, re.DOTALL)
+            pub_m = re.search(r"<pubDate>(.*?)</pubDate>", block, re.DOTALL)
+            title = re.sub(r"<[^>]+>", "", unescape((title_m.group(1) if title_m else "").strip())).strip()
+            if not title:
                 continue
-            seen.add(h)
-            news.append({
-                "id": len(news) + 1,
-                "headline": h,
-                "source": str(getattr(a, "source", "") or "RSS"),
-                "url": str(getattr(a, "url", "") or ""),
+            _push(targeted, {
+                "headline": title[:240],
+                "source": unescape((src_m.group(1) if src_m else "Google News")).strip()[:60] or "Google News",
+                "url": (link_m.group(1) if link_m else "").strip()[:500],
                 "sentiment": "unknown",
                 "confidence": 0,
-                "reason": str(getattr(a, "summary", "") or "")[:200],
-                "ts": str(getattr(a, "published_at", "") or datetime.now(timezone.utc).isoformat()),
+                "reason": "",
+                "ts": (pub_m.group(1) if pub_m else datetime.now(timezone.utc).isoformat()).strip(),
             })
     except Exception:
         pass
-    # 2. DuckDuckGo search for Nikkei 225 news
+
+    # 2. DuckDuckGo — per-symbol query (fallback / augment)
     try:
         import re
         from html import unescape
         resp = requests.get(
             "https://html.duckduckgo.com/html/",
-            params={"q": "Nikkei 225 Japan stock market today"},
+            params={"q": query},
             headers={"User-Agent": "GeoClaw/1.0"},
-            timeout=8,
+            timeout=6,
         )
-        blocks = re.findall(
+        for url_raw, title_raw, snippet_raw in re.findall(
             r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</span>',
             resp.text, re.DOTALL
-        )
-        for url_raw, title_raw, snippet_raw in blocks[:8]:
-            title = re.sub(r'<[^>]+>', '', unescape(title_raw)).strip()
-            if not title or title in seen:
+        )[:10]:
+            title = re.sub(r"<[^>]+>", "", unescape(title_raw)).strip()
+            if not title:
                 continue
-            seen.add(title)
-            url_match = re.search(r'uddg=([^&]+)', url_raw)
+            url_match = re.search(r"uddg=([^&]+)", url_raw)
             url = requests.utils.unquote(url_match.group(1)) if url_match else url_raw
-            news.append({
-                "id": len(news) + 1,
-                "headline": title[:200],
+            _push(targeted, {
+                "headline": title[:240],
                 "source": "Web Search",
                 "url": url[:500],
                 "sentiment": "unknown",
                 "confidence": 0,
-                "reason": re.sub(r'<[^>]+>', '', unescape(snippet_raw)).strip()[:200],
+                "reason": re.sub(r"<[^>]+>", "", unescape(snippet_raw)).strip()[:240],
                 "ts": datetime.now(timezone.utc).isoformat(),
             })
     except Exception:
         pass
-    # 3. Fallback to DB if nothing came back
-    if not news:
-        try:
-            db_result = _local_news_payload(limit=15)
-            news = db_result.get("news", [])
-        except Exception:
-            pass
-    _news_cache["news"] = news[:20]
-    _news_cache["ts"] = now
-    return JSONResponse({"status": "ok", "news": news[:20]})
+
+    # 3. Bundled RSS firehose — JP-biased, kept mainly for JP225.
+    try:
+        from sources.rss_client import RSSSource
+        for a in RSSSource().fetch()[:20]:
+            _push(generic, {
+                "headline": str(getattr(a, "headline", "") or "").strip(),
+                "source": str(getattr(a, "source", "") or "RSS"),
+                "url": str(getattr(a, "url", "") or ""),
+                "sentiment": "unknown",
+                "confidence": 0,
+                "reason": str(getattr(a, "summary", "") or "")[:240],
+                "ts": str(getattr(a, "published_at", "") or datetime.now(timezone.utc).isoformat()),
+            })
+    except Exception:
+        pass
+
+    # 4. DB seed (last-resort so we're never empty).
+    try:
+        for item in (_local_news_payload(limit=40) or {}).get("news") or []:
+            _push(generic, item)
+    except Exception:
+        pass
+
+    # Targeted items are already symbol-specific, so keep them all.
+    # Generic items only make it in if (a) passthrough is on (JP225) or
+    # (b) they match the per-symbol keyword list.  Non-JP symbols never
+    # show unrelated Japanese RSS again — if the filter yields nothing,
+    # the feed stays empty and the SPA shows a clean "no news" panel.
+    if rss_passthrough:
+        kept_generic = generic
+    else:
+        kept_generic = [item for item in generic if _news_matches_keywords(item, keywords)]
+
+    merged = targeted + kept_generic
+    # Re-number ids.
+    trimmed = [{**item, "id": idx + 1} for idx, item in enumerate(merged[:20])]
+
+    _news_cache["buckets"][sym_key] = {"news": trimmed, "ts": now}
+    return JSONResponse({
+        "status": "ok",
+        "symbol": sym_key,
+        "news": trimmed,
+        "cached": False,
+        "counts": {"targeted": len(targeted), "generic_kept": len(kept_generic)},
+    })
 
 
 @app.get("/api/scenarios")

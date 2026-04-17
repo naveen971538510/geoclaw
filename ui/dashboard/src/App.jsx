@@ -20,38 +20,159 @@ async function api(path) {
   return r.json();
 }
 
-function CandleChart({ candles }) {
-  if (!candles || candles.length < 2) return null;
-  const bars = candles.slice(-60).filter(c => [c.o, c.h, c.l, c.c].every(v => Number.isFinite(Number(v))));
-  if (bars.length < 2) return null;
+function _fmt(value, digits) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "\u2014";
+  return n.toLocaleString("en-GB", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function _fmtClock(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Professional candlestick chart: real axes, grid, crosshair-on-hover tooltip,
+// previous-close and last-price reference lines.  Replaces the earlier 92 px
+// sparkline with a 260 px chart that actually looks like a trading tool.
+function CandleChart({ candles, prevClose, digits = 2 }) {
+  const [hover, setHover] = useState(null);
+  const bars = Array.isArray(candles)
+    ? candles.slice(-60).filter(c => [c.o, c.h, c.l, c.c].every(v => Number.isFinite(Number(v))))
+    : [];
+  if (bars.length < 2) {
+    return (
+      <div style={{ height: 260, border: "1px solid var(--border)", borderRadius: 10, background: "#0a0e17",
+                    display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12 }}>
+        Waiting for live candles…
+      </div>
+    );
+  }
+  const W = 760, H = 260;
+  const padL = 8, padR = 62, padT = 10, padB = 22;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
   const lows = bars.map(c => Number(c.l));
   const highs = bars.map(c => Number(c.h));
-  const min = Math.min(...lows);
-  const max = Math.max(...highs);
-  const range = max - min || 1;
-  const W = 420, H = 92;
-  const gap = 2;
-  const step = W / bars.length;
-  const bodyW = Math.max(2, Math.min(7, step - gap));
-  const y = (v) => H - ((Number(v) - min) / range) * (H - 10) - 5;
+  let minY = Math.min(...lows);
+  let maxY = Math.max(...highs);
+  if (Number.isFinite(prevClose)) { minY = Math.min(minY, prevClose); maxY = Math.max(maxY, prevClose); }
+  const padPct = Math.max(1e-9, (maxY - minY) * 0.04);
+  minY -= padPct; maxY += padPct;
+  const rangeY = maxY - minY || 1;
+  const step = plotW / bars.length;
+  const bodyW = Math.max(2, Math.min(9, step * 0.65));
+  const y = v => padT + plotH - ((Number(v) - minY) / rangeY) * plotH;
+  const x = i => padL + i * step + step / 2;
+  const gridLevels = 5;
+  const gridVals = Array.from({ length: gridLevels }, (_, i) => minY + (rangeY * i) / (gridLevels - 1));
+  const lastBar = bars[bars.length - 1];
+  const lastClose = Number(lastBar.c);
+  const lastClr = lastClose >= Number(lastBar.o) ? "var(--bull)" : "var(--bear)";
+
+  const handleMove = evt => {
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const localX = ((evt.clientX - rect.left) / rect.width) * W;
+    const idx = Math.max(0, Math.min(bars.length - 1, Math.round((localX - padL - step / 2) / step)));
+    const c = bars[idx];
+    if (c) setHover({ idx, c, cx: x(idx) });
+  };
+
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: "block", height: 92 }}>
-      <line x1="0" x2={W} y1={y(bars[bars.length - 1].c)} y2={y(bars[bars.length - 1].c)} stroke="#334155" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
-      {bars.map((c, i) => {
-        const open = Number(c.o), high = Number(c.h), low = Number(c.l), close = Number(c.c);
-        const up = close >= open;
-        const color = up ? "var(--bull)" : "var(--bear)";
-        const cx = i * step + step / 2;
-        const top = Math.min(y(open), y(close));
-        const height = Math.max(1.5, Math.abs(y(open) - y(close)));
-        return (
-          <g key={`${c.quote_minute || c.t}-${i}`}>
-            <line x1={cx} x2={cx} y1={y(high)} y2={y(low)} stroke={color} strokeWidth="1" opacity="0.9" />
-            <rect x={cx - bodyW / 2} y={top} width={bodyW} height={height} rx="0.8" fill={color} opacity="0.82" />
+    <div style={{ position: "relative", border: "1px solid var(--border)", borderRadius: 10, background: "#0a0e17", overflow: "hidden" }}>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        style={{ display: "block", height: 260 }}
+        onMouseMove={handleMove}
+        onMouseLeave={() => setHover(null)}
+      >
+        {/* horizontal grid + right-axis price labels */}
+        {gridVals.map((v, i) => (
+          <g key={`grid-${i}`}>
+            <line x1={padL} x2={padL + plotW} y1={y(v)} y2={y(v)} stroke="#1f2937" strokeWidth="1" />
+            <text x={W - padR + 6} y={y(v) + 4} fontSize="10" fill="#64748b" fontFamily="ui-monospace, monospace">
+              {_fmt(v, digits)}
+            </text>
           </g>
-        );
-      })}
-    </svg>
+        ))}
+        {/* vertical grid — quartile marks */}
+        {[0.25, 0.5, 0.75].map((frac, i) => (
+          <line key={`v-${i}`}
+            x1={padL + plotW * frac} x2={padL + plotW * frac}
+            y1={padT} y2={padT + plotH}
+            stroke="#1f2937" strokeWidth="1" strokeDasharray="2 3" opacity="0.55" />
+        ))}
+        {/* prev-close reference */}
+        {Number.isFinite(prevClose) && (
+          <g>
+            <line x1={padL} x2={padL + plotW} y1={y(prevClose)} y2={y(prevClose)}
+              stroke="#64748b" strokeWidth="1" strokeDasharray="5 4" opacity="0.6" />
+            <rect x={W - padR} y={y(prevClose) - 8} width={padR - 4} height={16} rx="3" fill="#1f2937" />
+            <text x={W - padR + 4} y={y(prevClose) + 4} fontSize="10" fontWeight="700" fill="#94a3b8" fontFamily="ui-monospace, monospace">
+              PC {_fmt(prevClose, digits)}
+            </text>
+          </g>
+        )}
+        {/* last-price reference */}
+        <g>
+          <line x1={padL} x2={padL + plotW} y1={y(lastClose)} y2={y(lastClose)}
+            stroke={lastClr} strokeWidth="1" strokeDasharray="1 3" opacity="0.85" />
+          <rect x={W - padR} y={y(lastClose) - 9} width={padR - 4} height={18} rx="3" fill={lastClr} opacity="0.95" />
+          <text x={W - padR + 4} y={y(lastClose) + 4} fontSize="11" fontWeight="800" fill="#0a0e17" fontFamily="ui-monospace, monospace">
+            {_fmt(lastClose, digits)}
+          </text>
+        </g>
+        {/* candles */}
+        {bars.map((c, i) => {
+          const open = Number(c.o), high = Number(c.h), low = Number(c.l), close = Number(c.c);
+          const up = close >= open;
+          const color = up ? "var(--bull)" : "var(--bear)";
+          const cx = x(i);
+          const top = Math.min(y(open), y(close));
+          const height = Math.max(1.5, Math.abs(y(open) - y(close)));
+          return (
+            <g key={`${c.quote_minute || c.t || i}-${i}`}>
+              <line x1={cx} x2={cx} y1={y(high)} y2={y(low)} stroke={color} strokeWidth="1" opacity="0.95" />
+              <rect x={cx - bodyW / 2} y={top} width={bodyW} height={height} rx="1" fill={color} opacity={up ? 0.85 : 0.9} />
+            </g>
+          );
+        })}
+        {/* bottom axis labels — first, mid, last timestamp */}
+        {[0, Math.floor(bars.length / 2), bars.length - 1].map((idx, i) => (
+          <text key={`t-${i}`}
+            x={x(idx)} y={H - 6}
+            fontSize="10" fill="#64748b"
+            textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"}
+            fontFamily="ui-monospace, monospace">
+            {_fmtClock(bars[idx].quote_minute || bars[idx].quote_timestamp || bars[idx].t)}
+          </text>
+        ))}
+        {/* crosshair */}
+        {hover && (
+          <g pointerEvents="none">
+            <line x1={hover.cx} x2={hover.cx} y1={padT} y2={padT + plotH}
+              stroke="#f1f5f9" strokeWidth="1" strokeDasharray="3 3" opacity="0.35" />
+          </g>
+        )}
+      </svg>
+      {hover && (
+        <div style={{
+          position: "absolute", top: 8, left: 12,
+          background: "rgba(17,24,39,0.92)", border: "1px solid var(--border)",
+          borderRadius: 6, padding: "6px 10px", fontSize: 11, color: "var(--text)",
+          fontFamily: "ui-monospace, monospace", pointerEvents: "none", lineHeight: 1.5,
+        }}>
+          <div style={{ color: "var(--muted)" }}>
+            {_fmtClock(hover.c.quote_minute || hover.c.quote_timestamp || hover.c.t)}
+          </div>
+          <div>O <b>{_fmt(hover.c.o, digits)}</b>   H <b style={{ color: "var(--bull)" }}>{_fmt(hover.c.h, digits)}</b></div>
+          <div>L <b style={{ color: "var(--bear)" }}>{_fmt(hover.c.l, digits)}</b>   C <b>{_fmt(hover.c.c, digits)}</b></div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -160,10 +281,14 @@ export default function App() {
     try { const d = await api("/intelligence/jp225"); setNeuralSchema(d.error ? null : d); } catch { }
   }, []);
 
-  // News — refresh every 5 min
+  // News — per-asset, refresh every 30 s (backend caches for 45 s so this
+  // polls the cache mostly, but keeps the UI fresh when new headlines land).
   const loadNews = useCallback(async () => {
-    try { const d = await api("/news"); setNews((d.news || []).slice(0, 12)); } catch { }
-  }, []);
+    try {
+      const d = await api(`/news?symbol=${encodeURIComponent(activeSymbol)}`);
+      setNews((d.news || []).slice(0, 12));
+    } catch { }
+  }, [activeSymbol]);
 
   // Briefing — refresh every 5 min
   const loadBriefing = useCallback(async () => {
@@ -173,7 +298,7 @@ export default function App() {
   useEffect(() => { loadLive(); const t = setInterval(loadLive, 2000); return () => clearInterval(t); }, [loadLive]);
   useEffect(() => { loadOverview(); const t = setInterval(loadOverview, 60000); return () => clearInterval(t); }, [loadOverview]);
   useEffect(() => { loadNeural(); const t = setInterval(loadNeural, 60000); return () => clearInterval(t); }, [loadNeural]);
-  useEffect(() => { loadNews(); const t = setInterval(loadNews, 300000); return () => clearInterval(t); }, [loadNews]);
+  useEffect(() => { setNews([]); loadNews(); const t = setInterval(loadNews, 30000); return () => clearInterval(t); }, [loadNews]);
   useEffect(() => { loadBriefing(); const t = setInterval(loadBriefing, 300000); return () => clearInterval(t); }, [loadBriefing]);
 
   const biasColor = bias === "BULLISH" ? "var(--bull)" : bias === "BEARISH" ? "var(--bear)" : "var(--neutral)";
@@ -300,7 +425,11 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <CandleChart candles={live?.candles} />
+              <CandleChart
+                candles={live?.candles}
+                prevClose={Number(live?.prev_close)}
+                digits={priceDigits}
+              />
               {live?.chart_basis && (
                 <div style={{ marginTop: 6, fontSize: 11, color: "var(--muted)", textAlign: "right" }}>
                   Chart: {live.chart_basis.bars} × {live.chart_basis.interval} {live.chart_basis.source_symbol} candles
