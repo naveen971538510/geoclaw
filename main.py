@@ -11,8 +11,10 @@ from helpers import (
     get_summary,
 )
 from fetcher import fetch_live_articles
+import hmac
 import json
 import html
+import os
 from fastapi.responses import JSONResponse
 from config import DB_PATH, GEOCLAW_LOCAL_TOKEN, OPENAI_API_KEY
 from services.logging_service import get_logger
@@ -33,12 +35,49 @@ def _mutation_guard(request: Request):
     token = str(GEOCLAW_LOCAL_TOKEN or "").strip()
     provided = str(request.headers.get("x-geoclaw-token", "") or request.query_params.get("token", "") or "").strip()
     if token:
-        if provided == token or _local_client(request):
+        # Use a constant-time comparison to avoid leaking token bytes via
+        # timing side channels.  hmac.compare_digest handles unequal lengths
+        # safely and doesn't short-circuit on the first mismatching byte the
+        # way `==` does.
+        if _local_client(request) or (provided and hmac.compare_digest(provided, token)):
             return
         raise PermissionError("Local safety token required")
     if _local_client(request):
         return
     raise PermissionError("This route is limited to local requests")
+
+
+# Cross-origin allow-list for the SSE stream endpoint.  Kept in sync with the
+# list used by dashboard_api.py so a wildcard ACAO header is never returned.
+_STREAM_ALLOWED_ORIGINS = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+}
+_prod_origin = (os.environ.get("GEOCLAW_PRODUCTION_ORIGIN") or "").strip()
+if _prod_origin:
+    _STREAM_ALLOWED_ORIGINS.add(_prod_origin)
+
+
+def _stream_cors_headers(request: Request) -> dict:
+    """Return CORS headers only when the request Origin is in the allow-list.
+
+    Never returns ``Access-Control-Allow-Origin: *``; an unknown origin gets
+    no ACAO header at all, which makes browsers block the cross-origin read.
+    """
+    origin = str(request.headers.get("origin") or "").strip()
+    if origin and origin in _STREAM_ALLOWED_ORIGINS:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
 
 
 def _get_query_engine():
@@ -2061,14 +2100,15 @@ async def api_events_stream(request: Request):
         finally:
             bus.unsubscribe(subscriber, "*")
 
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    headers.update(_stream_cors_headers(request))
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
-        },
+        headers=headers,
     )
 
 

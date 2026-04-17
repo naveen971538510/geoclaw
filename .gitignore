@@ -16,3 +16,17 @@ logs/
 .claude/
 CLAUDE.md
 memory/
+
+# Secrets / token scratch files — never commit these.
+.bot_token
+*.secret
+*.secrets
+
+# Snapshot / backup copies of source files — use git history instead.
+*.backup
+*.save
+*.good
+*.stable_now
+*.stable_telegram
+*.final_working
+*.working_now
