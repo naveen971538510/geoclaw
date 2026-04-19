@@ -17,8 +17,9 @@ Variables referenced across the codebase (set in Railway, `.env`, or `.env.geocl
 | `GEOCLAW_DASHBOARD_NEWS_URL` | Override GET URL for `/news` (default `http://127.0.0.1:8001/api/news`). |
 | `GEOCLAW_DASHBOARD_SCENARIOS_URL` | Override GET URL for `/scenarios` (default `http://127.0.0.1:8001/api/scenarios`). |
 | `GEOCLAW_API_ASK_URL` | Base URL for natural-language queries (default `http://127.0.0.1:8001/api/ask` in `telegram_bot.py`; main app often on port 8000). |
-| `GEOCLAW_PRODUCTION_ORIGIN` | Extra allowed CORS origin for `dashboard_api.py`. |
-| `GEOCLAW_LOCAL_TOKEN` | Optional local mutation guard token (`main.py`). |
+| `GEOCLAW_PRODUCTION_ORIGIN` | Extra allowed CORS origin added to the SSE stream allow-list (`main.py::_STREAM_ALLOWED_ORIGINS`) and to `dashboard_api.py`. Exact scheme + host, no trailing slash (e.g. `https://app.example.com`). When set, it's the ONLY non-localhost origin browsers will receive `Access-Control-Allow-Origin` for on `/api/events/stream`; leave unset to keep the allow-list at localhost only. |
+| `GEOCLAW_LOCAL_TOKEN` | Shared secret for `_mutation_guard` in `main.py` and the Bearer auth middleware in `dashboard_api.py`. When set, non-loopback callers must present it via the `x-geoclaw-token` header, `?token=` query param, or `Authorization: Bearer <token>`; comparison is constant-time via `hmac.compare_digest`. When empty, every mutation endpoint is **localhost-only**. Generate with `python -c 'import secrets; print(secrets.token_urlsafe(32))'`. |
+| `TELEGRAM_WEBHOOK_SECRET` | Optional shared secret that hardens `POST /api/telegram/webhook`. When set, every request must include header `X-Telegram-Bot-Api-Secret-Token: <secret>` (constant-time compare) or the endpoint returns 401. Configure it at `setWebhook` time via the `secret_token` parameter so genuine Telegram deliveries include the header automatically. When empty, the endpoint falls back to unauthenticated behaviour (backward-compatible). |
 | `OPENAI_API_KEY` | OpenAI for article/thesis analysis (`config.py`, `main.py`). |
 | `OPENAI_MODEL` | OpenAI model name override. |
 | `NEWSAPI_KEY` | NewsAPI.org key if enabled. |
