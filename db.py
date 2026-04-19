@@ -1,5 +1,5 @@
 from fetcher import fetch_live_articles
-from services.db_helpers import get_conn as shared_get_conn
+from services.db_helpers import escape_like, get_conn as shared_get_conn
 
 DB_NAME = "geoclaw.db"
 
@@ -94,9 +94,12 @@ def get_saved_articles(limit: int = 20):
 def search_saved_articles(word: str, limit: int = 20):
     conn = get_connection()
     cur = conn.cursor()
-    like_word = f"%{word}%"
+    # Escape ``%`` and ``_`` in the user-supplied fragment so a caller can't
+    # pin a DB worker with a pathological wildcard (e.g. ``%%%%``).  Matched
+    # against the column with ``ESCAPE '\'``.
+    like_word = f"%{escape_like(word)}%"
     cur.execute(
-        "SELECT id, headline, source, url, published_at FROM articles WHERE headline LIKE ? ORDER BY id DESC LIMIT ?",
+        "SELECT id, headline, source, url, published_at FROM articles WHERE headline LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
         (like_word, limit)
     )
     rows = cur.fetchall()
