@@ -1431,9 +1431,14 @@ def _get_live_bars_cached(
     return bars[-int(interval_meta["count"]):] if bars else list(cached[-int(interval_meta["count"]):])
 
 
-# Backward-compatible aliases for any external callers.
-_append_jp225_candle = _append_live_candle
-_merge_quote_into_jp225_bars = _merge_quote_into_bars
+# Backward-compatible wrappers for any external callers that expect the
+# pre-multi-asset signatures (no symbol_key argument; JP225 implied).
+def _append_jp225_candle(quote: Dict[str, Any], interval_meta: Dict[str, Any], **kw):
+    return _append_live_candle("JP225", quote, interval_meta, **kw)
+
+
+def _merge_quote_into_jp225_bars(candles: List[Dict[str, Any]], quote: Dict[str, Any], interval_meta: Dict[str, Any]):
+    return _merge_quote_into_bars("JP225", candles, quote, interval_meta)
 
 
 def _get_jp225_bars_cached(symbol: str, interval_meta: Dict[str, Any]) -> List[Dict[str, Any]]:
