@@ -73,7 +73,7 @@ def _fetch_via_company_search(ticker: str, limit: int = 5) -> List[Dict[str, Any
     try:
         # Use the EDGAR company search
         resp = requests.get(
-            f"https://www.sec.gov/cgi-bin/browse-edgar",
+            "https://www.sec.gov/cgi-bin/browse-edgar",
             params={
                 "action": "getcompany",
                 "company": ticker,

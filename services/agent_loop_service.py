@@ -2,7 +2,6 @@ import json
 import os
 import time
 from collections import Counter
-from datetime import datetime, timezone
 from typing import Dict, List
 
 from config import (
@@ -42,7 +41,7 @@ from services.research_agent import research_thesis
 from services.reflection_service import run_reflection
 from services.db_helpers import get_conn as shared_get_conn
 from services.logging_service import get_logger
-from services.task_service import close_expired_tasks, close_tasks, create_task, list_tasks
+from services.task_service import close_expired_tasks, close_tasks, create_task
 from services.thesis_service import get_thesis, list_theses, normalize_thesis_key, record_thesis_event, update_thesis_confidence, upsert_thesis
 from services.thesis_lifecycle import decay_stale_theses, promote_demote_theses
 

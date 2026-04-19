@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install ruff==0.8.3
+      - run: ruff check .
+
+  security:
+    name: Bandit + pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install bandit==1.8.0 pip-audit==2.7.3
+      - name: Run bandit
+        run: bandit -c pyproject.toml -r . -x tests
+      - name: Run pip-audit
+        run: pip-audit --requirement requirements.txt --strict
+
+  test:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install runtime deps
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Ensure tests dir is importable
+        run: |
+          if [ -d tests ]; then
+            pytest -q
+          else
+            echo "No tests directory — skipping pytest."
+          fi

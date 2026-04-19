@@ -6,11 +6,10 @@ Backoff formula: min(base_seconds * consecutive_failures, 300).
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import requests

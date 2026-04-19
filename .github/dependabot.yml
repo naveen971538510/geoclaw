@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      runtime:
+        patterns:
+          - "fastapi"
+          - "uvicorn*"
+          - "pydantic*"
+          - "pandas"
+          - "numpy"
+          - "yfinance"
+          - "requests"
+          - "apscheduler"
+          - "feedparser"
+          - "psycopg2*"
+          - "google-generativeai"
+          - "groq"
+          - "openai"
+      dev:
+        patterns:
+          - "ruff"
+          - "bandit"
+          - "pip-audit"
+          - "pytest*"
+          - "pre-commit"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
