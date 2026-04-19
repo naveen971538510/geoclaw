@@ -70,6 +70,19 @@ def _clean_env(name: str) -> str:
 
 _load_local_env(ENV_FILE)
 
+GEOCLAW_ENV = (_clean_env("GEOCLAW_ENV") or "development").lower()
+IS_PRODUCTION = GEOCLAW_ENV in {"production", "prod"}
+
+if IS_PRODUCTION:
+    _pg_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or ""
+    _backend = (os.getenv("GEOCLAW_DB_BACKEND") or "").strip().lower()
+    if not _pg_url or _backend in {"sqlite", "sqlite3", "local"}:
+        raise RuntimeError(
+            "GEOCLAW_ENV=production requires DATABASE_URL (or POSTGRES_URL) "
+            "pointing to a Postgres instance. SQLite is not supported in production "
+            "because it cannot handle concurrent writes from multiple users."
+        )
+
 NEWSAPI_KEY = _clean_env("NEWSAPI_KEY")
 GUARDIAN_API_KEY = _clean_env("GUARDIAN_API_KEY")
 ALPHAVANTAGE_KEY = _clean_env("ALPHAVANTAGE_KEY")
