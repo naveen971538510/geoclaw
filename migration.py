@@ -1,14 +1,37 @@
+import re
+
 from services.db_helpers import get_conn
+
+# SQLite/Postgres identifier rule: ASCII letter/underscore, then letters,
+# digits, or underscores.  Identifiers have to be inlined into DDL (they
+# cannot be parametrised like values), so we validate them instead of
+# passing unvalidated strings into an f-string — that's a SQL-injection
+# footgun if any caller ever wires user/config input into these helpers.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _safe_identifier(value: str, kind: str) -> str:
+    if not isinstance(value, str) or not _IDENTIFIER_RE.match(value):
+        raise ValueError(f"Unsafe {kind} identifier: {value!r}")
+    return value
 
 
 def _table_columns(cur, table_name: str):
-    cur.execute(f"PRAGMA table_info({table_name})")
+    safe_table = _safe_identifier(table_name, "table")
+    cur.execute(f"PRAGMA table_info({safe_table})")
     return {row[1] for row in cur.fetchall()}
 
 
 def _ensure_column(cur, table_name: str, column_name: str, ddl: str):
-    if column_name not in _table_columns(cur, table_name):
-        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}")
+    safe_table = _safe_identifier(table_name, "table")
+    safe_column = _safe_identifier(column_name, "column")
+    # ``ddl`` is the column type + defaults clause (e.g. ``TEXT DEFAULT ''``)
+    # and is always a hardcoded literal at every call site.  We still reject
+    # obvious statement terminators as a belt-and-suspenders check.
+    if not isinstance(ddl, str) or ";" in ddl:
+        raise ValueError(f"Unsafe column DDL: {ddl!r}")
+    if safe_column not in _table_columns(cur, safe_table):
+        cur.execute(f"ALTER TABLE {safe_table} ADD COLUMN {safe_column} {ddl}")
 
 
 def run_migration(verbose: bool = False):
