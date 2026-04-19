@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoClaw — Sign in</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #070b11; color: #d8e2f0;
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: #0d131c; border: 1px solid #1e2835;
+    border-radius: 10px; padding: 28px 24px; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+  }
+  h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .3px; }
+  .sub { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid #1e2835; }
+  .tab {
+    flex: 1; padding: 10px 8px; font-size: 13px; text-align: center; cursor: pointer;
+    color: #8b949e; border-bottom: 2px solid transparent; user-select: none;
+  }
+  .tab.active { color: #7fc9ff; border-bottom-color: #3b82f6; }
+  label { display: block; font-size: 12px; color: #9fb0c6; margin: 12px 0 4px; }
+  input {
+    width: 100%; padding: 10px 12px; background: #07111c; color: #e7eefc;
+    border: 1px solid #253244; border-radius: 6px; font-size: 14px; font-family: inherit;
+  }
+  input:focus { outline: 2px solid #2d5da5; outline-offset: 1px; border-color: #3b82f6; }
+  button[type=submit] {
+    margin-top: 18px; width: 100%; padding: 11px; background: #1f6feb; color: #fff;
+    border: 0; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button[type=submit]:hover { background: #2f7ff5; }
+  button[type=submit]:disabled { background: #2a3646; cursor: not-allowed; }
+  .err {
+    margin-top: 12px; padding: 8px 10px; background: #3a1515; border: 1px solid #6a2a2a;
+    color: #ffc0c0; border-radius: 6px; font-size: 12px; display: none;
+  }
+  .ok {
+    margin-top: 12px; padding: 8px 10px; background: #11331b; border: 1px solid #2a6a3f;
+    color: #a8f0b8; border-radius: 6px; font-size: 12px; display: none;
+  }
+  .foot { margin-top: 18px; font-size: 11px; color: #6b7a8c; line-height: 1.45; }
+  a { color: #7fc9ff; text-decoration: none; }
+</style>
+</head>
+<body>
+  <form class="card" id="authForm" autocomplete="on">
+    <h1>GeoClaw</h1>
+    <p class="sub">Educational market intelligence — sign in to personalize.</p>
+    <div class="tabs">
+      <div class="tab active" data-mode="login" role="button" tabindex="0">Sign in</div>
+      <div class="tab" data-mode="signup" role="button" tabindex="0">Create account</div>
+    </div>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required autocomplete="email">
+    <label for="password">Password <span id="pwHint" style="color:#6b7a8c">(min 8 chars)</span></label>
+    <input id="password" name="password" type="password" required minlength="8" autocomplete="current-password">
+    <div id="nameWrap" style="display:none">
+      <label for="displayName">Display name <span style="color:#6b7a8c">(optional)</span></label>
+      <input id="displayName" name="displayName" type="text" autocomplete="nickname">
+    </div>
+    <div class="err" id="err"></div>
+    <div class="ok" id="ok"></div>
+    <button type="submit" id="submitBtn">Sign in</button>
+    <p class="foot">
+      Not financial advice. GeoClaw is an educational research tool. Signals, theses, and backtests
+      are informational only.
+    </p>
+  </form>
+<script>
+(function () {
+  var mode = 'login';
+  var tabs = document.querySelectorAll('.tab');
+  var submitBtn = document.getElementById('submitBtn');
+  var nameWrap = document.getElementById('nameWrap');
+  var pwInput = document.getElementById('password');
+  var errEl = document.getElementById('err');
+  var okEl = document.getElementById('ok');
+
+  function setMode(next) {
+    mode = next;
+    tabs.forEach(function (t) { t.classList.toggle('active', t.dataset.mode === mode); });
+    submitBtn.textContent = mode === 'login' ? 'Sign in' : 'Create account';
+    nameWrap.style.display = mode === 'signup' ? 'block' : 'none';
+    pwInput.setAttribute('autocomplete', mode === 'login' ? 'current-password' : 'new-password');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { setMode(t.dataset.mode); });
+    t.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') setMode(t.dataset.mode); });
+  });
+
+  function show(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+
+  document.getElementById('authForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+    submitBtn.disabled = true;
+    var body = {
+      email: document.getElementById('email').value.trim(),
+      password: pwInput.value,
+    };
+    if (mode === 'signup') body.display_name = document.getElementById('displayName').value.trim() || null;
+    try {
+      var res = await fetch('/api/auth/' + mode, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok || data.status !== 'ok') {
+        show(errEl, data.error || ('Request failed (' + res.status + ')'));
+        return;
+      }
+      try { localStorage.setItem('gc_access_token', data.access_token); } catch (_) {}
+      try { localStorage.setItem('gc_user', JSON.stringify(data.user || {})); } catch (_) {}
+      show(okEl, mode === 'signup' ? 'Account created. Redirecting…' : 'Signed in. Redirecting…');
+      setTimeout(function () { window.location.href = '/dashboard'; }, 600);
+    } catch (exc) {
+      show(errEl, 'Network error: ' + (exc && exc.message ? exc.message : exc));
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

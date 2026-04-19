@@ -10,6 +10,7 @@ import json
 import os
 import statistics
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -69,49 +70,23 @@ app.mount("/dashboard-app", StaticFiles(directory=str(SPA_DIST_DIR), check_dir=F
 # Without the env var the API is restricted to localhost only.
 # ---------------------------------------------------------------------------
 
-# Cached once at module load — changing the token requires a server restart.
+# Auth & rate-limit middleware live in middleware/ — register via build_middleware.
+# GEOCLAW_LOCAL_TOKEN: legacy shared token (back-compat, single-user).
+# GEOCLAW_JWT_SECRET: per-user JWT signing key (multi-user). Set this for public.
 _API_TOKEN = str(os.environ.get("GEOCLAW_LOCAL_TOKEN") or "").strip()
 
-
-def _unauth_response(request: Request) -> JSONResponse:
-    """401 with CORS headers preserved so dev consoles show the real error."""
-    origin = str(request.headers.get("origin") or "")
-    headers: dict[str, str] = {}
-    if origin in _origins:
-        headers["Access-Control-Allow-Origin"] = origin
-        headers["Access-Control-Allow-Credentials"] = "true"
-    return JSONResponse(
-        {
-            "status": "error",
-            "error": (
-                "Unauthorized — set GEOCLAW_LOCAL_TOKEN and pass it as "
-                "Authorization: Bearer <token> (or ?token=<token>)"
-            ),
-        },
-        status_code=401,
-        headers=headers,
-    )
+from middleware.auth import build_middleware as _build_auth_mw, unauth_response as _mw_unauth
+from middleware.rate_limit import build_middleware as _build_rate_mw
 
 
-def _is_protected_path(path: str) -> bool:
-    return path.startswith("/api/") or path == "/bias"
+def _unauth_response(request: Request, message: Optional[str] = None) -> JSONResponse:
+    """Back-compat wrapper used by handlers in this module."""
+    return _mw_unauth(request, _origins, message)
 
 
-@app.middleware("http")
-async def _auth_middleware(request: Request, call_next):
-    if request.method != "OPTIONS" and _is_protected_path(request.url.path):
-        client_host = str((request.client.host if request.client else "") or "")
-        is_local = client_host in {"127.0.0.1", "::1", "localhost", "testclient"}
-        if _API_TOKEN:
-            auth_header = str(request.headers.get("authorization") or "")
-            provided = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
-            if not provided:
-                provided = str(request.query_params.get("token") or "").strip()
-            if not is_local and not hmac.compare_digest(provided, _API_TOKEN):
-                return _unauth_response(request)
-        elif not is_local:
-            return _unauth_response(request)
-    return await call_next(request)
+app.middleware("http")(_build_auth_mw(_origins, legacy_token=_API_TOKEN))
+app.middleware("http")(_build_rate_mw(_origins))
+
 
 PRICE_PANEL_META = {
     "JP225": {"label": "JP225", "name": CANONICAL_INSTRUMENTS["JP225"]["name"]},
@@ -203,18 +178,26 @@ def _origin_base(request: Request) -> str:
 
 
 def _spa_index_response():
+    from services.terminal_ui_service import _inject_disclaimer
+
     index_path = SPA_DIST_DIR / "index.html"
     if index_path.exists():
-        return FileResponse(index_path)
+        try:
+            html = index_path.read_text(encoding="utf-8")
+            return HTMLResponse(_inject_disclaimer(html))
+        except Exception:
+            return FileResponse(index_path)
     return HTMLResponse(
-        """
+        _inject_disclaimer(
+            """
         <html>
           <body style="background:#050b12;color:#d8e2f0;font-family:ui-sans-serif,system-ui,sans-serif;padding:40px;">
             <h1>GeoClaw dashboard bundle not built yet.</h1>
             <p>Run <code>npm install</code> and <code>npm run build</code> inside <code>ui/dashboard</code> to generate the SPA bundle.</p>
           </body>
         </html>
-        """,
+        """
+        ),
         status_code=503,
     )
 
@@ -453,9 +436,94 @@ def _startup():
         pass
 
 
+# ---------------------------------------------------------------------------
+# Auth endpoints — signup / login / me.
+# signup + login are public (gated only by rate limit). /me requires JWT.
+# ---------------------------------------------------------------------------
+
+class _SignupRequest(BaseModel):
+    email: str
+    password: str
+    display_name: Optional[str] = None
+
+
+class _LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/signup")
+def auth_signup(payload: _SignupRequest, request: Request):
+    from services.user_repository import UserError, create_user
+    from services.auth_service import create_access_token
+    try:
+        user = create_user(payload.email, payload.password, payload.display_name)
+    except UserError as exc:
+        return JSONResponse({"status": "error", "code": exc.code, "error": str(exc)}, status_code=exc.status)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": f"signup_failed: {exc}"}, status_code=500)
+    try:
+        token = create_access_token(user["id"], user["email"])
+    except RuntimeError as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+    return {
+        "status": "ok",
+        "user": {"id": user["id"], "email": user["email"], "display_name": user.get("display_name"), "role": user.get("role")},
+        "access_token": token,
+        "token_type": "bearer",
+    }
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: _LoginRequest, request: Request):
+    from services.user_repository import UserError, authenticate
+    from services.auth_service import create_access_token
+    try:
+        user = authenticate(payload.email, payload.password)
+    except UserError as exc:
+        return JSONResponse({"status": "error", "code": exc.code, "error": str(exc)}, status_code=exc.status)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": f"login_failed: {exc}"}, status_code=500)
+    try:
+        token = create_access_token(user["id"], user["email"])
+    except RuntimeError as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+    return {
+        "status": "ok",
+        "user": user,
+        "access_token": token,
+        "token_type": "bearer",
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return _unauth_response(request, "Sign in required")
+    from services.user_repository import get_user_by_id
+    user = get_user_by_id(int(user_id))
+    if not user:
+        return _unauth_response(request, "User not found")
+    # Drop timestamps that aren't JSON-serializable by default.
+    return {
+        "status": "ok",
+        "user": _serialize_datetime_fields(user, "created_at", "last_login_at"),
+    }
+
+
 @app.get("/", response_class=RedirectResponse)
 def spa_home():
     return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    from services.terminal_ui_service import render_terminal_asset
+    try:
+        return HTMLResponse(render_terminal_asset("login.html"))
+    except FileNotFoundError:
+        return HTMLResponse("<h1>login.html missing from ui/</h1>", status_code=500)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -511,7 +579,7 @@ def spa_subscribe():
 
 
 @app.get("/api/signals")
-def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""):
+def api_signals(request: Request, hours: Optional[int] = 24, limit: int = 500, direction: str = ""):
     try:
         if _local_sqlite_mode():
             signals = _local_latest_signals(limit=max(1, min(int(limit or 500), 5000)))
@@ -520,6 +588,7 @@ def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""
                 signals = [item for item in signals if str(item.get("direction") or "").upper() == clean_direction]
             return JSONResponse({"status": "ok", "signals": signals, "mode": "local_sqlite"})
         _require_db()
+        from services.tenant_scope import current_user_id, and_scope
         where_parts = []
         params: List[Any] = []
         if hours and int(hours) > 0:
@@ -529,7 +598,9 @@ def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""
         if clean_direction in {"BUY", "SELL", "HOLD"}:
             where_parts.append("direction = %s")
             params.append(clean_direction)
-        where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        base_where = " AND ".join(where_parts) if where_parts else ""
+        scoped_where, scope_params = and_scope(base_where, current_user_id(request))
+        where_clause = f"WHERE {scoped_where}" if scoped_where else ""
         rows = query_all(
             f"""
             SELECT id, signal_name, value, direction, confidence, explanation_plain_english, ts
@@ -538,7 +609,7 @@ def api_signals(hours: Optional[int] = 24, limit: int = 500, direction: str = ""
             ORDER BY ts DESC, confidence DESC
             LIMIT %s;
             """,
-            tuple(params + [max(1, min(int(limit or 500), 5000))]),
+            tuple(params + scope_params + [max(1, min(int(limit or 500), 5000))]),
         )
         signals = [enrich_signal_row(_serialize_datetime_fields(row, "ts")) for row in rows]
         return JSONResponse({"status": "ok", "signals": signals})
