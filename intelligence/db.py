@@ -213,6 +213,78 @@ def ensure_intelligence_schema() -> None:
             ON agent_memory_snapshots (captured_at DESC);
             """
         )
+        # Users table — multi-tenant foundation. email is the natural key.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(320) NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name VARCHAR(128),
+                role VARCHAR(32) NOT NULL DEFAULT 'user',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_login_at TIMESTAMPTZ
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_users_email ON users (lower(email));
+            """
+        )
+        # Per-user LLM / API call accounting for quota enforcement.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_usage (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                endpoint VARCHAR(128) NOT NULL,
+                called_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                cost_units INTEGER NOT NULL DEFAULT 1
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_usage_user_time
+            ON user_usage (user_id, called_at DESC);
+            """
+        )
+        # Add user_id to principal tables — NULLable for backwards compat so
+        # existing rows are treated as "system/shared" data visible to all users.
+        # Backend jobs (scheduler, agent) leave user_id NULL.
+        # User writes (portfolio, watchlist, custom theses) stamp user_id.
+        _tenant_tables = (
+            # System-owned, shared by default — user_id NULL for agent writes.
+            "macro_signals", "geoclaw_signals", "chart_signals",
+            "price_data", "news_signals", "agent_memory_snapshots",
+            # User-owned: always should be scoped when written from user session.
+            "agent_theses", "thesis_events", "agent_briefings",
+            "thesis_confidence_log", "thesis_predictions",
+            "portfolio_positions", "portfolio_snapshots", "watchlist",
+        )
+        for tbl in _tenant_tables:
+            # Only add user_id if the table exists — some installs skip optional tables.
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = %s LIMIT 1;
+                """,
+                (tbl,),
+            )
+            if not cur.fetchone():
+                continue
+            cur.execute(
+                f"""
+                ALTER TABLE {tbl}
+                ADD COLUMN IF NOT EXISTS user_id INTEGER
+                    REFERENCES users(id) ON DELETE CASCADE;
+                """
+            )
+            cur.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{tbl}_user_id ON {tbl} (user_id);"
+            )
         cur.close()
 
 
