@@ -1844,9 +1844,9 @@ def api_jp225_intelligence(force: bool = False):
         # Pull live JP225 price if available
         jp225_price, jp225_change = 0.0, 0.0
         try:
-            cache_key = "1"
-            candle_cache = _jp225_candles_cache.get(cache_key, {})
-            # Use last known price from candle cache or price_snapshots
+            # Previously pulled from an in-memory candle cache; that cache was
+            # renamed + keyed on (symbol, interval) in the multi-asset rewrite,
+            # so fall back to the durable price_snapshots table instead.
             snap = _local_query(
                 "SELECT price FROM price_snapshots WHERE symbol = ? ORDER BY captured_at DESC LIMIT 1",
                 ("^N225",),
