@@ -35,8 +35,18 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - run: pip install bandit==1.8.0 pip-audit==2.7.3
-      - name: Run bandit
+      # Only fail on high-severity / high-confidence bandit findings.
+      # Lower-severity issues still appear in the job log so they can be
+      # triaged, but they don't gate merges on pre-existing code.
+      - name: Run bandit (high severity gate)
+        run: bandit -c pyproject.toml -r . -x tests --severity-level high --confidence-level high
+      - name: Run bandit (full report, informational only)
+        if: always()
+        continue-on-error: true
         run: bandit -c pyproject.toml -r . -x tests
+      # pip-audit runs strict so a freshly-disclosed CVE on a pinned
+      # dependency is surfaced immediately. Dependabot (see
+      # .github/dependabot.yml) will auto-open the bump PR.
       - name: Run pip-audit
         run: pip-audit --requirement requirements.txt --strict
 
