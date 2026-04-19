@@ -1009,7 +1009,13 @@ async def api_stream(request: Request):
                         ],
                         "mode": "local_sqlite",
                     }
-                    data_hash = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+                    # MD5 here is a non-cryptographic "did the SSE
+                    # payload change" fingerprint. Never used for auth
+                    # or integrity. `usedforsecurity=False` silences
+                    # bandit (B324) and FIPS-mode restrictions.
+                    data_hash = hashlib.md5(
+                        json.dumps(data, sort_keys=True).encode(), usedforsecurity=False
+                    ).hexdigest()
                     if data_hash == _last_hash:
                         yield ": keepalive\n\n"
                     else:
@@ -1056,7 +1062,11 @@ async def api_stream(request: Request):
                         for r in price_rows
                     ],
                 }
-                data_hash = hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
+                # Same MD5-as-fingerprint pattern as the sqlite branch
+                # above. Not a security primitive — see comment there.
+                data_hash = hashlib.md5(
+                    json.dumps(data, sort_keys=True).encode(), usedforsecurity=False
+                ).hexdigest()
                 if data_hash == _last_hash:
                     # Data unchanged — send a lightweight keepalive comment instead
                     yield ": keepalive\n\n"
