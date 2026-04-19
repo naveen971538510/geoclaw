@@ -763,7 +763,8 @@ def run_migration(verbose: bool = False):
             "web_sourced_articles",
             "learned_rules",
         ]:
-            cur.execute("SELECT COUNT(*) FROM " + table)
+            safe_table = _safe_identifier(table, "table")
+            cur.execute(f"SELECT COUNT(*) FROM {safe_table}")  # noqa: S608
             count = cur.fetchone()[0]
             print(f"{table}: OK ({count} rows)")
 

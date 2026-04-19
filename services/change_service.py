@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict
 
 
 from config import DB_PATH

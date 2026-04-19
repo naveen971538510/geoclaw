@@ -22,7 +22,11 @@ def clean_text(value: str) -> str:
 
 def content_hash(headline: str, url: str) -> str:
     base = (headline or "").strip().lower() + "|" + (url or "").strip().lower()
-    return sha1(base.encode("utf-8")).hexdigest()
+    # SHA-1 here is a non-cryptographic dedup key on publicly visible
+    # (headline, url) pairs — it never feeds an auth or integrity
+    # decision. `usedforsecurity=False` suppresses FIPS/bandit warnings
+    # while keeping the existing digest format stable across restarts.
+    return sha1(base.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 class NewsSource(ABC):

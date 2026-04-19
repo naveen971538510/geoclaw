@@ -11,7 +11,6 @@ Metrics computed:
   - Profit factor (gross wins / gross losses)
 """
 import math
-import sys
 
 import pandas as pd
 import yfinance as yf
@@ -148,7 +147,7 @@ if total >= 3:
     gross_losses = abs(sum(r for r in r_series if r < 0))
     profit_factor = gross_wins / gross_losses if gross_losses > 0 else float("inf")
 
-print(f"\n=== BACKTEST RESULTS ===")
+print("\n=== BACKTEST RESULTS ===")
 print(f"Total closed:   {total}")
 print(f"Wins:           {wins}")
 print(f"Losses:         {losses}")
@@ -157,5 +156,5 @@ print(f"Open:           {len(df_results[df_results['outcome'] == 'OPEN'])}")
 print(f"Sharpe (real):  {sharpe:.2f}" if not math.isnan(sharpe) else "Sharpe:         n/a (need ≥3 closed trades with timestamps)")
 print(f"Max drawdown:   {max_dd_pct:.1f}%")
 print(f"Profit factor:  {profit_factor:.2f}" if profit_factor != float("inf") else "Profit factor:  ∞ (no losses)")
-print(f"\nTarget: 55%+ usable | 60%+ strong | Sharpe > 1.0 desirable")
-print(f"Saved to backtest_results.csv")
+print("\nTarget: 55%+ usable | 60%+ strong | Sharpe > 1.0 desirable")
+print("Saved to backtest_results.csv")

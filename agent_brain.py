@@ -35,11 +35,6 @@ if str(ROOT) not in sys.path:
 
 from config import (
     DB_PATH,
-    MAX_AUTONOMOUS_GOALS_PER_DAY,
-    MAX_ACTION_PROPOSALS_PER_RUN,
-    ACTION_PROPOSAL_MIN_CONFIDENCE,
-    TRACKED_SYMBOLS,
-    DEFAULT_WATCHLIST,
     _load_local_env,
     ENV_FILE,
 )

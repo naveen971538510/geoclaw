@@ -1,4 +1,3 @@
-import sqlite3
 from fetcher import fetch_live_articles
 from services.db_helpers import get_conn as shared_get_conn
 

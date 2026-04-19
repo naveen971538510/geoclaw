@@ -9,7 +9,7 @@ class CorrelationEngine:
             return 0.0
         mean_x = sum(x) / n
         mean_y = sum(y) / n
-        numerator = sum((left - mean_x) * (right - mean_y) for left, right in zip(x, y))
+        numerator = sum((left - mean_x) * (right - mean_y) for left, right in zip(x, y, strict=False))
         denom_x = math.sqrt(sum((value - mean_x) ** 2 for value in x))
         denom_y = math.sqrt(sum((value - mean_y) ** 2 for value in y))
         return numerator / (denom_x * denom_y) if denom_x and denom_y else 0.0

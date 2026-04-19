@@ -190,9 +190,22 @@ class AlertService:
         except Exception as exc:
             logger.error("Alert log failed: %s", exc)
 
+    @staticmethod
+    def _applescript_escape(value: str) -> str:
+        """Escape a string for safe embedding inside an AppleScript literal.
+
+        AppleScript string literals accept backslash-escaped ``\\"`` and
+        ``\\\\``, so we escape those two characters and strip control
+        characters (including newlines) that could close a string early.
+        """
+        text = "".join(ch for ch in str(value or "") if ch == " " or ch.isprintable())
+        return text.replace("\\", "\\\\").replace('"', '\\"')
+
     def _send_desktop(self, title, body):
-        safe_title = str(title or "").replace('"', "'")
-        safe_body = str(body or "").replace('"', "'").replace("\n", " ")
+        raw_title = str(title or "")
+        raw_body = str(body or "").replace("\n", " ")
+        safe_title = self._applescript_escape(raw_title)
+        safe_body = self._applescript_escape(raw_body[:100])
         try:
             import subprocess
 
@@ -200,7 +213,7 @@ class AlertService:
                 [
                     "osascript",
                     "-e",
-                    f'display notification "{safe_body[:100]}" with title "GeoClaw: {safe_title}"',
+                    f'display notification "{safe_body}" with title "GeoClaw: {safe_title}"',
                 ],
                 timeout=5,
                 capture_output=True,
@@ -210,8 +223,9 @@ class AlertService:
             try:
                 import subprocess
 
+                # notify-send takes args directly; no shell / escape layer.
                 subprocess.run(
-                    ["notify-send", f"GeoClaw: {safe_title}", safe_body[:100]],
+                    ["notify-send", f"GeoClaw: {raw_title}", raw_body[:100]],
                     timeout=5,
                     capture_output=True,
                     check=False,

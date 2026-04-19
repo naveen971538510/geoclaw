@@ -1732,6 +1732,19 @@ def api_export_predictions_csv():
 @app.post("/api/telegram/webhook", response_class=JSONResponse)
 async def api_telegram_webhook(request: Request):
     try:
+        # Telegram lets you pin a secret token to the webhook at
+        # setWebhook-time; every real delivery includes the header
+        # X-Telegram-Bot-Api-Secret-Token. We require it when
+        # TELEGRAM_WEBHOOK_SECRET is configured so anonymous callers on
+        # the public URL can't feed arbitrary updates to the bot.
+        expected = str(os.environ.get("TELEGRAM_WEBHOOK_SECRET") or "").strip()
+        if expected:
+            provided = str(request.headers.get("x-telegram-bot-api-secret-token") or "").strip()
+            if not provided or not hmac.compare_digest(provided, expected):
+                return JSONResponse(
+                    {"status": "error", "route": "/api/telegram/webhook", "error": "invalid webhook secret"},
+                    status_code=401,
+                )
         from services.telegram_bot import TelegramBot
 
         update = await request.json()

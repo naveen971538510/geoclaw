@@ -1,4 +1,4 @@
-import importlib.util, sys
+import importlib.util
 
 # Patch agent to run immediately instead of waiting
 spec = importlib.util.spec_from_file_location("agent", "agent.py")

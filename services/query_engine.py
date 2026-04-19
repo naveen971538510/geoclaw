@@ -1,7 +1,7 @@
 import random
 import re
 import sqlite3
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 
 from services.ai_contracts import default_query_answer_bundle, format_query_answer_text
 

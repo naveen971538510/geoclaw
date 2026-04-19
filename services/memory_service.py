@@ -1,4 +1,3 @@
-import sqlite3
 from typing import Dict, List, Optional
 
 from services.goal_service import ensure_agent_tables, get_conn, utc_now_iso
