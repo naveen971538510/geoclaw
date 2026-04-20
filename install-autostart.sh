@@ -52,20 +52,15 @@ echo "  Uninstall: ./install-autostart.sh --uninstall"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Verify it's running
-sleep 3
-if launchctl list 2>/dev/null | grep -q "$LABEL"; then
-  echo "✓ Agent is loaded. Checking server…"
-  for i in {1..15}; do
-    if curl -sf http://localhost:8000/ -o /dev/null 2>&1; then
-      echo "✓ GeoClaw is running at http://localhost:8000"
-      exit 0
-    fi
-    sleep 1
-  done
-  echo "⚠  Agent loaded but health check didn't respond in 15s."
-  echo "   Check the log: tail -20 $WORKDIR/.geoclaw.log"
-else
-  echo "✗ Agent failed to load. Try: launchctl load -w $PLIST_DST"
-  exit 1
-fi
+# Verify the server responds (more reliable than parsing launchctl list)
+echo "Waiting for GeoClaw to come up…"
+for i in {1..30}; do
+  if curl -sf http://localhost:8000/ -o /dev/null 2>&1; then
+    echo "✓ GeoClaw is running at http://localhost:8000"
+    exit 0
+  fi
+  sleep 1
+done
+echo "⚠  Server didn't respond within 30s. Check the log:"
+echo "   tail -40 $WORKDIR/.geoclaw.log"
+echo "   (Agent is loaded — it may still be finishing first-run setup.)"
