@@ -120,6 +120,16 @@ def test_and_scope_with_alias():
     assert "gs.user_id" in clause
 
 
+def test_scope_placeholder_question_mark():
+    clause, params = scope_where(5, placeholder="?")
+    assert clause == "(user_id IS NULL OR user_id = ?)" and params == [5]
+
+
+def test_and_scope_placeholder_question_mark():
+    clause, params = and_scope("status = ?", 7, placeholder="?")
+    assert "= ?" in clause and clause.endswith("user_id = ?)") and params == [7]
+
+
 # ---------- middleware: rate limit ----------------------------------------
 
 def _make_rate_app():

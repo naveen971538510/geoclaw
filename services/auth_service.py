@@ -161,3 +161,18 @@ def extract_bearer_token(auth_header: str) -> str:
     if h.lower().startswith("bearer "):
         return h[7:].strip()
     return ""
+
+
+# --- One-time tokens (email verification / password reset) ----------------
+# The raw token is emailed to the user; only its SHA-256 hash is stored in
+# the auth_tokens table. Lookup happens by re-hashing the submitted token.
+
+_TOKEN_BYTES = 32  # ~43 urlsafe chars, collision probability negligible
+
+
+def generate_token() -> str:
+    return secrets.token_urlsafe(_TOKEN_BYTES)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()

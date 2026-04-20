@@ -2,6 +2,65 @@ from pathlib import Path
 
 from config import UI_DIR
 
+_AUTH_SHIM_HTML = """
+<script id="gc-auth-shim">
+(function(){
+  var KEY='gc_access_token';
+  function tok(){try{return localStorage.getItem(KEY)||'';}catch(_){return '';}}
+  function isProtectedApi(urlStr){
+    try{
+      var u=new URL(urlStr,window.location.origin);
+      if(u.origin!==window.location.origin) return false;
+      if(!u.pathname.startsWith('/api/')) return false;
+      if(u.pathname==='/api/auth/login'||u.pathname==='/api/auth/signup') return false;
+      return true;
+    }catch(_){return false;}
+  }
+  var _fetch=window.fetch;
+  window.fetch=function(input,init){
+    var urlStr=typeof input==='string'?input:(input&&input.url)||'';
+    try{
+      if(isProtectedApi(urlStr)){
+        var t=tok();
+        if(t){
+          init=init||{};
+          var h=new Headers((init&&init.headers)||(input&&input.headers)||{});
+          if(!h.has('Authorization')) h.set('Authorization','Bearer '+t);
+          init.headers=h;
+        }
+      }
+    }catch(_){}
+    return _fetch.call(this,input,init).then(function(resp){
+      try{
+        if(resp&&resp.status===401&&isProtectedApi(resp.url||urlStr)){
+          try{localStorage.removeItem(KEY);localStorage.removeItem('gc_user');}catch(_){}
+          if(window.location.pathname!=='/login') window.location.href='/login';
+        }
+      }catch(_){}
+      return resp;
+    });
+  };
+  if(typeof window.EventSource==='function'){
+    var _ES=window.EventSource;
+    function W(url,cfg){
+      try{
+        var u=new URL(url,window.location.origin);
+        if(u.origin===window.location.origin&&u.pathname.startsWith('/api/')){
+          var t=tok();
+          if(t&&!u.searchParams.has('token')){u.searchParams.set('token',t);url=u.toString();}
+        }
+      }catch(_){}
+      return new _ES(url,cfg);
+    }
+    W.prototype=_ES.prototype;
+    W.CONNECTING=_ES.CONNECTING;W.OPEN=_ES.OPEN;W.CLOSED=_ES.CLOSED;
+    window.EventSource=W;
+  }
+  window.gcAuth={token:tok,logout:function(){try{localStorage.removeItem(KEY);localStorage.removeItem('gc_user');}catch(_){}window.location.href='/login';}};
+})();
+</script>
+"""
+
 _DISCLAIMER_HTML = """
 <div id="gc-disclaimer-banner" role="note" style="position:fixed;bottom:0;left:0;right:0;z-index:2147483647;background:#2a1d00;color:#ffd280;border-top:1px solid #6a4a00;padding:8px 14px;font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;line-height:1.4;display:flex;gap:12px;align-items:center;justify-content:center;box-shadow:0 -2px 8px rgba(0,0,0,.45);">
   <span style="opacity:.95;">
@@ -15,8 +74,27 @@ _DISCLAIMER_HTML = """
 """
 
 
+def _inject_auth_shim(html: str) -> str:
+    """Inject the JWT auth shim into <head> (or early <body>) so it wraps
+    window.fetch and EventSource before any page script fires."""
+    if 'id="gc-auth-shim"' in html:
+        return html
+    lower = html.lower()
+    idx = lower.find("</head>")
+    if idx != -1:
+        return html[:idx] + _AUTH_SHIM_HTML + html[idx:]
+    idx = lower.find("<body")
+    if idx != -1:
+        end = html.find(">", idx)
+        if end != -1:
+            insert_at = end + 1
+            return html[:insert_at] + _AUTH_SHIM_HTML + html[insert_at:]
+    return _AUTH_SHIM_HTML + html
+
+
 def _inject_disclaimer(html: str) -> str:
-    if "gc-disclaimer-banner" in html:
+    html = _inject_auth_shim(html)
+    if 'id="gc-disclaimer-banner"' in html:
         return html
     lower = html.lower()
     idx = lower.rfind("</body>")

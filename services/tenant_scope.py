@@ -25,7 +25,7 @@ def current_user_id(request) -> Optional[int]:
         return None
 
 
-def scope_where(user_id: Optional[int], alias: str = "") -> Tuple[str, List[Any]]:
+def scope_where(user_id: Optional[int], alias: str = "", placeholder: str = "%s") -> Tuple[str, List[Any]]:
     """
     Return (sql_fragment, params) to filter a SELECT to rows visible to user_id.
 
@@ -35,20 +35,25 @@ def scope_where(user_id: Optional[int], alias: str = "") -> Tuple[str, List[Any]
 
     - If user_id is None: returns "user_id IS NULL" (only shared rows).
     - If user_id is set: returns "(user_id IS NULL OR user_id = %s)" with param.
+
+    ``placeholder`` defaults to ``%s`` (psycopg2 / intelligence.db style). Pass
+    ``?`` when splicing into SQL routed through services/db_helpers.query, which
+    uses SQLite ``?`` placeholders and converts them to ``%s`` internally on
+    the Postgres path.
     """
     col = f"{alias}.user_id" if alias else "user_id"
     if user_id is None:
         return f"{col} IS NULL", []
-    return f"({col} IS NULL OR {col} = %s)", [int(user_id)]
+    return f"({col} IS NULL OR {col} = {placeholder})", [int(user_id)]
 
 
-def and_scope(existing_where: str, user_id: Optional[int], alias: str = "") -> Tuple[str, List[Any]]:
+def and_scope(existing_where: str, user_id: Optional[int], alias: str = "", placeholder: str = "%s") -> Tuple[str, List[Any]]:
     """
     Combine an existing WHERE clause with the tenant scope.
 
     Pass the existing clause WITHOUT "WHERE" — returned fragment also has no WHERE.
     """
-    tenant_clause, tenant_params = scope_where(user_id, alias=alias)
+    tenant_clause, tenant_params = scope_where(user_id, alias=alias, placeholder=placeholder)
     existing = (existing_where or "").strip()
     if not existing:
         return tenant_clause, tenant_params

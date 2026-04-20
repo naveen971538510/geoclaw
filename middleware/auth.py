@@ -18,7 +18,13 @@ from fastapi.responses import JSONResponse
 
 from services.auth_service import verify_access_token
 
-AUTH_PUBLIC_PREFIXES: Tuple[str, ...] = ("/api/auth/signup", "/api/auth/login")
+AUTH_PUBLIC_PREFIXES: Tuple[str, ...] = (
+    "/api/auth/signup",
+    "/api/auth/login",
+    "/api/auth/verify-email",
+    "/api/auth/request-password-reset",
+    "/api/auth/reset-password",
+)
 
 
 def is_protected_path(path: str) -> bool:

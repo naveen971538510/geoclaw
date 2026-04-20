@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoClaw — Verify email</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #04070d;
+    --card: rgba(13, 19, 28, 0.78);
+    --card-border: rgba(120, 170, 240, 0.10);
+    --text: #e7eefc;
+    --muted: #8b99ae;
+    --accent: #3b82f6;
+    --accent-hi: #5a98ff;
+    --ok: #4ade80;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: radial-gradient(1100px 600px at 20% -10%, rgba(59, 130, 246, 0.15), transparent 60%),
+                radial-gradient(900px 500px at 90% 110%, rgba(99, 102, 241, 0.12), transparent 60%),
+                var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .wrap { width: 100%; max-width: 400px; }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 0 14px 2px; color: #cfdaeb;
+    font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+  }
+  .brand .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: linear-gradient(140deg, #3b82f6 0%, #6366f1 100%);
+    box-shadow: 0 4px 14px rgba(59, 130, 246, .35), inset 0 0 0 1px rgba(255,255,255,.08);
+    display: grid; place-items: center; color: #fff;
+    font-weight: 700; font-size: 12px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 36px 28px 28px;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,.55),
+                0 1px 0 rgba(255,255,255,.03) inset;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    text-align: center;
+  }
+  .status-icon {
+    width: 64px; height: 64px; border-radius: 50%;
+    margin: 0 auto 18px; display: grid; place-items: center;
+    transition: background .3s ease, box-shadow .3s ease;
+  }
+  .status-icon.loading { background: rgba(59,130,246,.12); box-shadow: 0 0 0 6px rgba(59,130,246,.04); }
+  .status-icon.ok      { background: rgba(74,222,128,.14); box-shadow: 0 0 0 6px rgba(74,222,128,.04); }
+  .status-icon.err     { background: rgba(248,113,113,.14); box-shadow: 0 0 0 6px rgba(248,113,113,.04); }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 2.5px solid rgba(90,152,255,.22); border-top-color: var(--accent-hi);
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .check, .cross { width: 30px; height: 30px; }
+  .check { color: var(--ok); }
+  .cross { color: var(--danger); }
+  h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; line-height: 1.55; }
+  .sub strong { color: var(--text); font-weight: 500; }
+  .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+  .btn {
+    display: block; width: 100%; padding: 12px; border-radius: 8px;
+    font-size: 14px; font-weight: 600; text-decoration: none; text-align: center;
+    cursor: pointer; border: 0; font-family: inherit;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hi); }
+  .btn-ghost {
+    background: transparent; color: #cfdaeb;
+    border: 1px solid rgba(200,220,255,.12);
+  }
+  .btn-ghost:hover { border-color: rgba(200,220,255,.25); background: rgba(255,255,255,.02); }
+  .foot { margin-top: 16px; font-size: 12px; color: var(--muted); }
+  a { color: #7fc9ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  /* fade in swap between states */
+  .state { display: none; }
+  .state.active { display: block; animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><span class="mark">GC</span>GeoClaw</div>
+
+    <div class="card">
+      <!-- Loading state -->
+      <div class="state active" id="state-loading">
+        <div class="status-icon loading"><div class="spinner"></div></div>
+        <h1>Verifying your email…</h1>
+        <p class="sub">Hang tight while we confirm your account.</p>
+      </div>
+
+      <!-- Success -->
+      <div class="state" id="state-ok">
+        <div class="status-icon ok">
+          <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <h1>Email verified</h1>
+        <p class="sub">Your email is confirmed. You're all set to use GeoClaw.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/dashboard">Go to dashboard</a>
+          <a class="btn btn-ghost" href="/login">Back to sign in</a>
+        </div>
+      </div>
+
+      <!-- Error -->
+      <div class="state" id="state-err">
+        <div class="status-icon err">
+          <svg class="cross" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </div>
+        <h1 id="errTitle">Verification failed</h1>
+        <p class="sub" id="errMsg">This link is invalid or has expired.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/login">Sign in to request a new link</a>
+          <a class="btn btn-ghost" href="/">Back home</a>
+        </div>
+      </div>
+
+      <!-- Missing token -->
+      <div class="state" id="state-missing">
+        <div class="status-icon err">
+          <svg class="cross" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <h1>Link incomplete</h1>
+        <p class="sub">This verification link doesn't include a token. Make sure you opened the full link from your email.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/login">Sign in</a>
+        </div>
+      </div>
+
+      <p class="foot">Trouble? <a href="/forgot-password">Reset password</a> &middot; <a href="mailto:support@geoclaw.local">Contact support</a></p>
+    </div>
+  </div>
+
+<script>
+(function () {
+  function swap(id) {
+    document.querySelectorAll('.state').forEach(function (el) { el.classList.remove('active'); });
+    document.getElementById(id).classList.add('active');
+  }
+  var params = new URLSearchParams(window.location.search);
+  var token = (params.get('token') || '').trim();
+  if (!token) { swap('state-missing'); return; }
+
+  function messageFor(code, fallback) {
+    if (code === 'token_expired')  return { title: 'Link expired',   msg: 'This verification link has expired. Sign in and request a new one.' };
+    if (code === 'token_consumed') return { title: 'Already verified', msg: 'This link has already been used. Your email may already be verified — try signing in.' };
+    if (code === 'invalid_token')  return { title: 'Invalid link',   msg: 'This verification link isn\u2019t recognised. Request a fresh one from your account settings.' };
+    return { title: 'Verification failed', msg: fallback || 'We couldn\u2019t verify your email. Try again from your account.' };
+  }
+
+  fetch('/api/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token }),
+  }).then(function (res) {
+    return res.json().then(function (data) { return { res: res, data: data }; })
+      .catch(function () { return { res: res, data: {} }; });
+  }).then(function (r) {
+    if (r.res.ok && r.data && r.data.status === 'ok') {
+      swap('state-ok');
+    } else {
+      var m = messageFor(r.data && r.data.code, r.data && r.data.error);
+      document.getElementById('errTitle').textContent = m.title;
+      document.getElementById('errMsg').textContent = m.msg;
+      swap('state-err');
+    }
+  }).catch(function (exc) {
+    document.getElementById('errTitle').textContent = 'Network error';
+    document.getElementById('errMsg').textContent = (exc && exc.message) ? exc.message : 'Please check your connection and try again.';
+    swap('state-err');
+  });
+})();
+</script>
+</body>
+</html>

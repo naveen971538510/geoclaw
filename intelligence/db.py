@@ -224,13 +224,41 @@ def ensure_intelligence_schema() -> None:
                 role VARCHAR(32) NOT NULL DEFAULT 'user',
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                last_login_at TIMESTAMPTZ
+                last_login_at TIMESTAMPTZ,
+                email_verified_at TIMESTAMPTZ
             );
             """
         )
         cur.execute(
             """
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+            """
+        )
+        cur.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_users_email ON users (lower(email));
+            """
+        )
+        # Single-use email verification and password-reset tokens.
+        # token_hash stores a sha256 of the plaintext token that is emailed to
+        # the user — the raw token is never persisted.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_tokens (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind VARCHAR(32) NOT NULL,
+                token_hash VARCHAR(128) NOT NULL UNIQUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMPTZ NOT NULL,
+                consumed_at TIMESTAMPTZ
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_auth_tokens_user_kind
+            ON auth_tokens (user_id, kind, consumed_at);
             """
         )
         # Per-user LLM / API call accounting for quota enforcement.

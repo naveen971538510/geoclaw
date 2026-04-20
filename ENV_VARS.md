@@ -40,6 +40,22 @@ Variables referenced across the codebase (set in Railway, `.env`, or `.env.geocl
 | `NFP_EXPECTED_MOM_K` | Expected NFP month-over-month change in thousands for signal scoring (`intelligence/signal_engine.py`). |
 | `GEOCLAW_DAILY_BRIEFING_TZ` | Timezone name for legacy daily signal brief scheduling (if used). |
 
+## Email delivery — verification & password reset (optional)
+
+If `SMTP_HOST` is unset, email is disabled and the app logs message bodies to stdout — useful for local dev. Configure these to enable real email delivery (verify-email links, password-reset links).
+
+| Variable | Description |
+|----------|-------------|
+| `SMTP_HOST` | SMTP relay hostname (e.g. `smtp.sendgrid.net`, `smtp.resend.com`). Setting this flips email delivery on. |
+| `SMTP_PORT` | SMTP port. Default `587` (STARTTLS). Use `465` for implicit SSL/TLS. |
+| `SMTP_USER` | Relay username, if auth is required. |
+| `SMTP_PASSWORD` | Relay password / API token. |
+| `SMTP_USE_TLS` | `1`/`true` → STARTTLS. Defaults to on when `SMTP_PORT=587`. |
+| `SMTP_USE_SSL` | `1`/`true` → SMTPS from the handshake. Defaults to on when `SMTP_PORT=465`. |
+| `SMTP_FROM` | `From:` address on outgoing email. Default `no-reply@geoclaw.local`. Use a verified sender for deliverability. |
+| `SMTP_FROM_NAME` | Display name wrapped around `SMTP_FROM` (e.g. `GeoClaw`). |
+| `SMTP_TIMEOUT` | Socket timeout in seconds. Default `15`. |
+
 ## Telegram bot (optional)
 
 | Variable | Description |

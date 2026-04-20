@@ -38,6 +38,7 @@ from intelligence.scenario_engine import generate_scenarios
 from services.price_normalizer import CANONICAL_INSTRUMENTS, normalize_candle_timestamp, normalize_quote, parse_utc_datetime
 from services.tradingview_client import TradingViewClient
 from services.signal_taxonomy import SIGNAL_SECTION_ORDER, enrich_signal_row, group_signals
+from services.tenant_scope import and_scope, current_user_id, scope_where
 
 app = FastAPI(title="GeoClaw Dashboard API", version="1.0.0")
 SPA_DIST_DIR = ROOT / "static" / "dashboard-app"
@@ -148,14 +149,17 @@ def _signal_bias_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _latest_signal_cycle_rows() -> List[Dict[str, Any]]:
+def _latest_signal_cycle_rows(user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    scope_clause, scope_params = scope_where(user_id)
     rows = query_all(
-        """
+        f"""
         SELECT DISTINCT ON (signal_name)
             id, signal_name, value, direction, confidence, explanation_plain_english, ts
         FROM geoclaw_signals
+        WHERE {scope_clause}
         ORDER BY signal_name, ts DESC;
-        """
+        """,
+        tuple(scope_params),
     )
     active_rows = [
         enrich_signal_row(_serialize_datetime_fields(row, "ts"))
@@ -452,6 +456,66 @@ class _LoginRequest(BaseModel):
     password: str
 
 
+class _VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class _RequestPasswordResetRequest(BaseModel):
+    email: str
+
+
+class _ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+def _send_verify_email(request: Request, user: Dict[str, Any]) -> None:
+    """Issue a verify-email token and attempt delivery. Best-effort; never raises."""
+    try:
+        from services.email_service import send_email
+        from services.user_repository import TOKEN_KIND_VERIFY_EMAIL, issue_token
+
+        token = issue_token(int(user["id"]), TOKEN_KIND_VERIFY_EMAIL)
+        verify_url = f"{_origin_base(request)}/verify-email?token={token}"
+        send_email(
+            str(user.get("email") or ""),
+            subject="Verify your GeoClaw email",
+            body_text=(
+                "Welcome to GeoClaw.\n\n"
+                "Click the link below to verify your email address. This link expires "
+                "in 7 days.\n\n"
+                f"{verify_url}\n\n"
+                "If you did not create this account, ignore this message."
+            ),
+        )
+    except Exception:
+        pass
+
+
+def _send_password_reset_email(request: Request, user: Dict[str, Any]) -> None:
+    """Issue a password-reset token and attempt delivery. Best-effort."""
+    try:
+        from services.email_service import send_email
+        from services.user_repository import TOKEN_KIND_PASSWORD_RESET, issue_token
+
+        token = issue_token(int(user["id"]), TOKEN_KIND_PASSWORD_RESET)
+        reset_url = f"{_origin_base(request)}/reset-password?token={token}"
+        send_email(
+            str(user.get("email") or ""),
+            subject="Reset your GeoClaw password",
+            body_text=(
+                "We received a request to reset your GeoClaw password.\n\n"
+                "Click the link below to choose a new password. This link expires "
+                "in 1 hour.\n\n"
+                f"{reset_url}\n\n"
+                "If you did not request this reset, ignore this message — your "
+                "password will remain unchanged."
+            ),
+        )
+    except Exception:
+        pass
+
+
 @app.post("/api/auth/signup")
 def auth_signup(payload: _SignupRequest, request: Request):
     from services.user_repository import UserError, create_user
@@ -466,6 +530,7 @@ def auth_signup(payload: _SignupRequest, request: Request):
         token = create_access_token(user["id"], user["email"])
     except RuntimeError as exc:
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+    _send_verify_email(request, user)
     return {
         "status": "ok",
         "user": {"id": user["id"], "email": user["email"], "display_name": user.get("display_name"), "role": user.get("role")},
@@ -508,8 +573,76 @@ def auth_me(request: Request):
     # Drop timestamps that aren't JSON-serializable by default.
     return {
         "status": "ok",
-        "user": _serialize_datetime_fields(user, "created_at", "last_login_at"),
+        "user": _serialize_datetime_fields(user, "created_at", "last_login_at", "email_verified_at"),
     }
+
+
+@app.post("/api/auth/request-verification")
+def auth_request_verification(request: Request):
+    """Re-send the email verification link to the signed-in user."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return _unauth_response(request, "Sign in required")
+    from services.user_repository import get_user_by_id
+    user = get_user_by_id(int(user_id))
+    if not user:
+        return _unauth_response(request, "User not found")
+    if user.get("email_verified_at"):
+        return {"status": "ok", "already_verified": True}
+    _send_verify_email(request, user)
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/verify-email")
+def auth_verify_email(payload: _VerifyEmailRequest, request: Request):
+    from services.user_repository import (
+        TOKEN_KIND_VERIFY_EMAIL,
+        UserError,
+        consume_token,
+        mark_email_verified,
+    )
+    try:
+        user = consume_token(payload.token, TOKEN_KIND_VERIFY_EMAIL)
+    except UserError as exc:
+        return JSONResponse({"status": "error", "code": exc.code, "error": str(exc)}, status_code=exc.status)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": f"verify_failed: {exc}"}, status_code=500)
+    mark_email_verified(int(user["id"]))
+    return {"status": "ok", "email": user.get("email")}
+
+
+@app.post("/api/auth/request-password-reset")
+def auth_request_password_reset(payload: _RequestPasswordResetRequest, request: Request):
+    """
+    Always returns 200 to prevent email enumeration. Delivery is best-effort —
+    if the email doesn't exist or SMTP is unavailable, the response is the same.
+    """
+    from services.user_repository import get_user_by_email
+    try:
+        user = get_user_by_email(payload.email)
+        if user and user.get("is_active"):
+            _send_password_reset_email(request, user)
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/reset-password")
+def auth_reset_password(payload: _ResetPasswordRequest, request: Request):
+    from services.user_repository import (
+        TOKEN_KIND_PASSWORD_RESET,
+        UserError,
+        consume_token,
+        update_password,
+    )
+    try:
+        user = consume_token(payload.token, TOKEN_KIND_PASSWORD_RESET)
+        update_password(int(user["id"]), payload.new_password)
+    except UserError as exc:
+        return JSONResponse({"status": "error", "code": exc.code, "error": str(exc)}, status_code=exc.status)
+    except Exception as exc:
+        return JSONResponse({"status": "error", "error": f"reset_failed: {exc}"}, status_code=500)
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=RedirectResponse)
@@ -524,6 +657,33 @@ def login_page():
         return HTMLResponse(render_terminal_asset("login.html"))
     except FileNotFoundError:
         return HTMLResponse("<h1>login.html missing from ui/</h1>", status_code=500)
+
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+def forgot_password_page():
+    from services.terminal_ui_service import render_terminal_asset
+    try:
+        return HTMLResponse(render_terminal_asset("forgot_password.html"))
+    except FileNotFoundError:
+        return HTMLResponse("<h1>forgot_password.html missing from ui/</h1>", status_code=500)
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+def reset_password_page():
+    from services.terminal_ui_service import render_terminal_asset
+    try:
+        return HTMLResponse(render_terminal_asset("reset_password.html"))
+    except FileNotFoundError:
+        return HTMLResponse("<h1>reset_password.html missing from ui/</h1>", status_code=500)
+
+
+@app.get("/verify-email", response_class=HTMLResponse)
+def verify_email_page():
+    from services.terminal_ui_service import render_terminal_asset
+    try:
+        return HTMLResponse(render_terminal_asset("verify_email.html"))
+    except FileNotFoundError:
+        return HTMLResponse("<h1>verify_email.html missing from ui/</h1>", status_code=500)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -542,7 +702,7 @@ def spa_signals():
 
 
 @app.get("/bias")
-def api_bias():
+def api_bias(request: Request):
     try:
         if _local_sqlite_mode():
             active_rows = _local_latest_signals(limit=30)
@@ -556,7 +716,7 @@ def api_bias():
                 }
             )
         _require_db()
-        active_rows = _latest_signal_cycle_rows()
+        active_rows = _latest_signal_cycle_rows(current_user_id(request))
         last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
         payload = _signal_bias_payload(active_rows)
         return JSONResponse(
@@ -588,7 +748,6 @@ def api_signals(request: Request, hours: Optional[int] = 24, limit: int = 500, d
                 signals = [item for item in signals if str(item.get("direction") or "").upper() == clean_direction]
             return JSONResponse({"status": "ok", "signals": signals, "mode": "local_sqlite"})
         _require_db()
-        from services.tenant_scope import current_user_id, and_scope
         where_parts = []
         params: List[Any] = []
         if hours and int(hours) > 0:
@@ -618,12 +777,12 @@ def api_signals(request: Request, hours: Optional[int] = 24, limit: int = 500, d
 
 
 @app.get("/api/dashboard/overview")
-def api_dashboard_overview():
+def api_dashboard_overview(request: Request):
     try:
         if _local_sqlite_mode():
             return JSONResponse(_local_dashboard_overview_payload())
         _require_db()
-        active_rows = _latest_signal_cycle_rows()
+        active_rows = _latest_signal_cycle_rows(current_user_id(request))
         grouped = group_signals(active_rows)
         last_updated = max((str(item.get("ts") or "") for item in active_rows), default="")
         return JSONResponse(
@@ -641,26 +800,27 @@ def api_dashboard_overview():
 
 
 @app.get("/api/prices")
-def api_prices(symbols: str = "JP225", points: int = 18):
+def api_prices(request: Request, symbols: str = "JP225", points: int = 18):
     try:
         if _local_sqlite_mode():
             return JSONResponse(_local_prices_payload(symbols=symbols, points=points))
         _require_db()
         requested = [item.strip().upper() for item in str(symbols or "").split(",") if item.strip()]
         ordered = [symbol for symbol in requested if symbol in PRICE_PANEL_META] or list(PRICE_PANEL_META.keys())
+        scope_clause, scope_params = scope_where(current_user_id(request))
         rows = query_all(
-            """
+            f"""
             SELECT ticker, price, ts
             FROM (
                 SELECT ticker, price, ts,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY ts DESC) AS rn
                 FROM price_data
-                WHERE ticker = ANY(%s)
+                WHERE ticker = ANY(%s) AND {scope_clause}
             ) ranked
             WHERE rn <= %s
             ORDER BY ticker ASC, ts ASC;
             """,
-            (ordered, max(2, min(int(points or 18), 60))),
+            (ordered, *scope_params, max(2, min(int(points or 18), 60))),
         )
         history_by_ticker: Dict[str, List[Dict[str, Any]]] = {ticker: [] for ticker in ordered}
         for row in rows:
@@ -699,18 +859,21 @@ def api_prices(symbols: str = "JP225", points: int = 18):
 
 
 @app.get("/api/macro")
-def api_macro():
+def api_macro(request: Request):
     try:
         if _local_sqlite_mode():
             return JSONResponse({"status": "ok", "macro": [], "mode": "local_sqlite"})
         _require_db()
+        scope_clause, scope_params = scope_where(current_user_id(request))
         rows = query_all(
-            """
+            f"""
             SELECT DISTINCT ON (metric_name)
                 metric_name, observed_at, value, previous_value, pct_change
             FROM macro_signals
+            WHERE {scope_clause}
             ORDER BY metric_name, observed_at DESC;
-            """
+            """,
+            tuple(scope_params),
         )
         for r in rows:
             if r.get("observed_at"):
@@ -721,21 +884,22 @@ def api_macro():
 
 
 @app.get("/api/charts")
-def api_charts():
+def api_charts(request: Request):
     try:
         if _local_sqlite_mode():
             return JSONResponse({"status": "ok", "charts": [], "mode": "local_sqlite"})
         _require_db()
         since = datetime.now(timezone.utc) - timedelta(days=7)
+        scoped_where, scope_params = and_scope("detected_at >= %s", current_user_id(request))
         rows = query_all(
-            """
+            f"""
             SELECT id, ticker, pattern_name, direction, confidence, detected_at, bar_index
             FROM chart_signals
-            WHERE detected_at >= %s
+            WHERE {scoped_where}
             ORDER BY detected_at DESC
             LIMIT 200;
             """,
-            (since,),
+            (since, *scope_params),
         )
         for r in rows:
             if r.get("detected_at"):
@@ -823,7 +987,7 @@ def api_news():
 
 
 @app.get("/api/scenarios")
-def api_scenarios():
+def api_scenarios(request: Request):
     try:
         if _local_sqlite_mode():
             return JSONResponse(
@@ -834,13 +998,16 @@ def api_scenarios():
                 }
             )
         _require_db()
+        scope_clause, scope_params = scope_where(current_user_id(request))
         macro_rows = query_all(
-            """
+            f"""
             SELECT DISTINCT ON (metric_name)
                 metric_name, observed_at, value, previous_value, pct_change
             FROM macro_signals
+            WHERE {scope_clause}
             ORDER BY metric_name, observed_at DESC;
-            """
+            """,
+            tuple(scope_params),
         )
         for r in macro_rows:
             if r.get("observed_at"):
@@ -852,33 +1019,41 @@ def api_scenarios():
 
 
 @app.get("/api/briefing")
-def api_briefing():
+def api_briefing(request: Request):
     try:
         if _local_sqlite_mode():
             return JSONResponse(_local_briefing_payload())
         _require_db()
         since = datetime.now(timezone.utc) - timedelta(hours=48)
+        uid = current_user_id(request)
+        signals_where, signals_params = and_scope("ts >= %s", uid)
         signals = query_all(
-            """
+            f"""
             SELECT signal_name, direction, confidence, explanation_plain_english, ts
-            FROM geoclaw_signals WHERE ts >= %s ORDER BY confidence DESC LIMIT 30;
+            FROM geoclaw_signals WHERE {signals_where} ORDER BY confidence DESC LIMIT 30;
             """,
-            (since,),
+            (since, *signals_params),
         )
+        macro_scope, macro_params = scope_where(uid)
         macro = query_all(
-            """
+            f"""
             SELECT DISTINCT ON (metric_name)
                 metric_name, value, previous_value, pct_change, observed_at
             FROM macro_signals
+            WHERE {macro_scope}
             ORDER BY metric_name, observed_at DESC;
-            """
+            """,
+            tuple(macro_params),
         )
+        charts_scope, charts_params = scope_where(uid)
         charts = query_all(
-            """
+            f"""
             SELECT ticker, pattern_name, direction, confidence, detected_at
             FROM chart_signals
+            WHERE {charts_scope}
             ORDER BY detected_at DESC LIMIT 20;
-            """
+            """,
+            tuple(charts_params),
         )
         ctx = build_signals_context(signals, macro, charts)
         text = generate_dashboard_briefing(ctx)
@@ -893,15 +1068,16 @@ def api_briefing():
         return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
-def _macro_bias_score() -> float:
+def _macro_bias_score(user_id: Optional[int] = None) -> float:
     """Rough -1 bearish to +1 bullish from last 24h signals."""
     try:
         if _local_sqlite_mode():
             return 0.0
         since = datetime.now(timezone.utc) - timedelta(hours=24)
+        scoped_where, scope_params = and_scope("ts >= %s", user_id)
         rows = query_all(
-            "SELECT direction, confidence FROM geoclaw_signals WHERE ts >= %s;",
-            (since,),
+            f"SELECT direction, confidence FROM geoclaw_signals WHERE {scoped_where};",
+            (since, *scope_params),
         )
         if not rows:
             return 0.0
@@ -941,7 +1117,7 @@ async def api_portfolio(request: Request):
 
         import yfinance as yf
 
-        bias = _macro_bias_score()
+        bias = _macro_bias_score(current_user_id(request))
         results = []
         for sym in tickers[:40]:
             try:
@@ -1050,6 +1226,9 @@ async def api_stream(request: Request):
     """
     _SSE_INTERVAL = 30  # seconds between checks
     _last_hash = ""
+    # Capture the authenticated user once at connect time — middleware runs on the
+    # initial request, not on every generator iteration.
+    _stream_user_id = current_user_id(request)
 
     async def _event_generator():
         nonlocal _last_hash
@@ -1090,22 +1269,26 @@ async def api_stream(request: Request):
                     await asyncio.sleep(_SSE_INTERVAL)
                     continue
                 _require_db()
+                sig_where, sig_params = and_scope("ts >= %s", _stream_user_id)
                 signal_rows = query_all(
-                    """
+                    f"""
                     SELECT DISTINCT ON (signal_name)
                         signal_name, direction, confidence, ts
                     FROM geoclaw_signals
-                    WHERE ts >= %s
+                    WHERE {sig_where}
                     ORDER BY signal_name, ts DESC;
                     """,
-                    (datetime.now(timezone.utc) - timedelta(hours=24),),
+                    (datetime.now(timezone.utc) - timedelta(hours=24), *sig_params),
                 )
+                price_scope, price_params = scope_where(_stream_user_id)
                 price_rows = query_all(
-                    """
+                    f"""
                     SELECT DISTINCT ON (ticker) ticker, price, ts
                     FROM price_data
+                    WHERE {price_scope}
                     ORDER BY ticker, ts DESC;
-                    """
+                    """,
+                    tuple(price_params),
                 )
                 # Build data payload (without volatile wallclock ts) for hashing
                 data = {
@@ -1585,17 +1768,23 @@ def api_events_live(since: float = 0):
 
 
 @app.get("/api/theses/confidence")
-def api_theses_confidence():
+def api_theses_confidence(request: Request):
     try:
         from services.db_helpers import query
+        scoped_where, scope_params = and_scope(
+            "COALESCE(status, '') NOT IN ('superseded', 'expired')",
+            current_user_id(request),
+            placeholder="?",
+        )
         rows = query(
-            """
+            f"""
             SELECT thesis_key, confidence, terminal_risk, status, watchlist_suggestion
             FROM agent_theses
-            WHERE COALESCE(status, '') NOT IN ('superseded', 'expired')
+            WHERE {scoped_where}
             ORDER BY confidence DESC
             LIMIT 20
-            """
+            """,
+            tuple(scope_params),
         )
         theses = []
         for r in rows:
@@ -1613,17 +1802,20 @@ def api_theses_confidence():
 
 
 @app.get("/api/predictions/board")
-def api_predictions_board():
+def api_predictions_board(request: Request):
     try:
         from services.db_helpers import query
+        scope_clause, scope_params = scope_where(current_user_id(request), placeholder="?")
         rows = query(
-            """
+            f"""
             SELECT thesis_key, predicted_direction, symbol, price_at_prediction,
                    price_at_check, actual_change_pct, outcome, outcome_note, checked_at
             FROM thesis_predictions
+            WHERE {scope_clause}
             ORDER BY id DESC
             LIMIT 50
-            """
+            """,
+            tuple(scope_params),
         )
         predictions = [dict(r) for r in rows]
         # Compute accuracy stats
