@@ -1,0 +1,47 @@
+# Render.com Infrastructure-as-Code for GeoClaw.
+# Deploy path:
+#   1. Sign up at https://render.com (no credit card needed for free tier).
+#   2. Sign up at https://neon.tech and create a project → copy the
+#      connection string (postgres://user:pass@ep-xxx.neon.tech/neondb).
+#   3. In Render dashboard → New → Blueprint → connect your GitHub repo.
+#   4. Render reads this file and proposes the service.
+#   5. Set DATABASE_URL in the env var form to your Neon string.
+#      GEOCLAW_JWT_SECRET is auto-generated via generateValue below.
+#   6. Click Apply. First deploy ~3 min.
+#
+# See RENDER_DEPLOY.md for a walkthrough with screenshots.
+
+services:
+  - type: web
+    name: geoclaw
+    runtime: python
+    region: frankfurt  # switch to oregon/singapore if Neon region is closer
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python dashboard_api.py
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      # Render sets PORT automatically; dashboard_api.py reads it.
+      - key: GEOCLAW_JWT_SECRET
+        generateValue: true  # Render auto-generates a 32-byte secret
+      - key: GEOCLAW_AUTO_SCHEDULE
+        value: "true"
+      - key: GEOCLAW_ALLOW_LOCALHOST_AUTH
+        value: "0"  # production default: deny
+      - key: DATABASE_URL
+        sync: false  # you paste the Neon connection string in the dashboard
+      # Optional: SMTP for email verification + password reset.
+      # If unset, signups still work but verification/reset emails are
+      # logged instead of sent. Set these four together or none at all.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
