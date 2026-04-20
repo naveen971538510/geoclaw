@@ -27,6 +27,12 @@ _PBKDF2_ITERS = 700_000
 _PBKDF2_DKLEN = 32
 _SALT_BYTES = 16
 
+# Input caps to prevent CPU DoS via arbitrarily-long inputs. 1024 chars of
+# password is already absurd; bcrypt traditionally caps at 72. 254 chars is
+# the RFC 5321 maximum for an email address.
+MAX_PASSWORD_LEN = 1024
+MAX_EMAIL_LEN = 254
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -44,6 +50,8 @@ def _b64u_decode(s: str) -> bytes:
 def hash_password(plaintext: str) -> str:
     if not isinstance(plaintext, str) or len(plaintext) < 8:
         raise ValueError("password must be a string of at least 8 characters")
+    if len(plaintext) > MAX_PASSWORD_LEN:
+        raise ValueError(f"password must be at most {MAX_PASSWORD_LEN} characters")
     salt = secrets.token_bytes(_SALT_BYTES)
     dk = hashlib.pbkdf2_hmac(
         "sha256",
@@ -57,6 +65,8 @@ def hash_password(plaintext: str) -> str:
 
 def verify_password(plaintext: str, stored: str) -> bool:
     if not stored or not isinstance(stored, str):
+        return False
+    if not isinstance(plaintext, str) or len(plaintext) > MAX_PASSWORD_LEN:
         return False
     parts = stored.split("$")
     if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
@@ -83,11 +93,19 @@ def verify_password(plaintext: str, stored: str) -> bool:
 # --- Email validation -------------------------------------------------------
 
 def normalize_email(email: str) -> str:
-    return (email or "").strip().lower()
+    s = (email or "").strip().lower()
+    # Hard cap to prevent DoS via multi-MB email strings feeding the regex.
+    return s[:MAX_EMAIL_LEN]
 
 
 def is_valid_email(email: str) -> bool:
-    return bool(_EMAIL_RE.match(normalize_email(email)))
+    s = normalize_email(email)
+    if not s or len(s) > MAX_EMAIL_LEN:
+        return False
+    # Reject CR/LF so an email value can never inject SMTP headers downstream.
+    if "\r" in s or "\n" in s:
+        return False
+    return bool(_EMAIL_RE.match(s))
 
 
 # --- JWT (HS256) ------------------------------------------------------------
@@ -149,7 +167,9 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
     if not isinstance(exp, int) or int(time.time()) >= exp:
         return None
     sub = payload.get("sub")
-    if not isinstance(sub, int):
+    # sub must be a positive integer user id — reject 0, negatives, booleans
+    # (bool is a subclass of int in Python), and non-int types.
+    if not isinstance(sub, int) or isinstance(sub, bool) or sub <= 0:
         return None
     return payload
 

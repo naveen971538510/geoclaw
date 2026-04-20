@@ -164,6 +164,12 @@ def consume_token(token: str, kind: str) -> Dict[str, Any]:
     """
     Validate and atomically consume a token. Returns the matching user row.
     Raises UserError on expired / unknown / already-consumed / wrong-kind.
+
+    Atomicity: the UPDATE filters on `consumed_at IS NULL AND expires_at > NOW()`
+    and uses RETURNING to detect whether exactly one row was claimed. Two
+    concurrent consumers can't both succeed — only the first UPDATE sees
+    `consumed_at IS NULL`. This doesn't depend on SELECT FOR UPDATE or on
+    the connection's autocommit setting.
     """
     _assert_known_kind(kind)
     if not token or not isinstance(token, str):
@@ -171,33 +177,45 @@ def consume_token(token: str, kind: str) -> Dict[str, Any]:
     th = hash_token(token)
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Atomic claim: only succeeds once, and only if not expired.
             cur.execute(
                 """
-                SELECT id, user_id, expires_at, consumed_at
-                FROM auth_tokens
-                WHERE token_hash = %s AND kind = %s
-                FOR UPDATE;
+                UPDATE auth_tokens
+                SET consumed_at = NOW()
+                WHERE token_hash = %s
+                  AND kind = %s
+                  AND consumed_at IS NULL
+                  AND expires_at > NOW()
+                RETURNING id, user_id;
                 """,
                 (th, kind),
             )
-            row = cur.fetchone()
-            if not row:
-                raise UserError("invalid_token", "Token is invalid or has already been used", 400)
-            if row.get("consumed_at"):
-                raise UserError("token_consumed", "Token has already been used", 400)
-            expires_at = row.get("expires_at")
-            if expires_at and expires_at < datetime.now(timezone.utc):
+            claimed = cur.fetchone()
+            if not claimed:
+                # Distinguish between "never existed", "already consumed",
+                # and "expired" to give the UI actionable error codes. This
+                # second read is safe because the atomic UPDATE above has
+                # already settled the race; we're only diagnosing why it failed.
+                cur.execute(
+                    """
+                    SELECT expires_at, consumed_at
+                    FROM auth_tokens
+                    WHERE token_hash = %s AND kind = %s;
+                    """,
+                    (th, kind),
+                )
+                diag = cur.fetchone()
+                if not diag:
+                    raise UserError("invalid_token", "Token is invalid or has already been used", 400)
+                if diag.get("consumed_at"):
+                    raise UserError("token_consumed", "Token has already been used", 400)
                 raise UserError("token_expired", "Token has expired", 400)
-            cur.execute(
-                "UPDATE auth_tokens SET consumed_at = NOW() WHERE id = %s;",
-                (row["id"],),
-            )
             cur.execute(
                 """
                 SELECT id, email, display_name, role, is_active, email_verified_at
                 FROM users WHERE id = %s;
                 """,
-                (row["user_id"],),
+                (claimed["user_id"],),
             )
             user = cur.fetchone()
     if not user:
@@ -218,12 +236,34 @@ def mark_email_verified(user_id: int) -> None:
 
 
 def update_password(user_id: int, new_password: str) -> None:
+    """
+    Hash and store a new password, and simultaneously consume any
+    outstanding password-reset tokens for this user so a reset link
+    can't be re-used after the user has already updated their password.
+
+    NOTE: outstanding JWT access tokens are NOT invalidated by this call.
+    Adding session revocation requires embedding a `password_changed_at`
+    (or token-version) claim in JWTs and checking it on every request.
+    Tracked in AUDIT_FINDINGS.md.
+    """
     if not isinstance(new_password, str) or len(new_password) < 8:
         raise UserError("weak_password", "Password must be at least 8 characters", 400)
+    from services.auth_service import MAX_PASSWORD_LEN  # avoid circular import at module load
+    if len(new_password) > MAX_PASSWORD_LEN:
+        raise UserError("weak_password", f"Password must be at most {MAX_PASSWORD_LEN} characters", 400)
     pw_hash = hash_password(new_password)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE users SET password_hash = %s WHERE id = %s;",
                 (pw_hash, int(user_id)),
+            )
+            # Invalidate any outstanding password-reset tokens so a stolen
+            # link can't be used after the user has updated their password.
+            cur.execute(
+                """
+                UPDATE auth_tokens SET consumed_at = NOW()
+                WHERE user_id = %s AND kind = %s AND consumed_at IS NULL;
+                """,
+                (int(user_id), TOKEN_KIND_PASSWORD_RESET),
             )

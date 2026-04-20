@@ -13,6 +13,8 @@ and messages are logged to stdout for local development).
     SMTP_FROM       "From" header (default: "no-reply@geoclaw.local")
     SMTP_FROM_NAME  optional display name for the From address
     SMTP_TIMEOUT    socket timeout, seconds (default 15)
+    SMTP_ALLOW_PLAINTEXT  "1" to permit auth + send over an unencrypted socket
+                          (dev only; refuses to login plaintext by default).
 """
 from __future__ import annotations
 
@@ -21,7 +23,14 @@ import smtplib
 import ssl
 import sys
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Optional
+
+from services.auth_service import MAX_EMAIL_LEN, is_valid_email
+
+# Hard caps — defense in depth against header / injection abuse.
+_MAX_SUBJECT_LEN = 300
+_MAX_BODY_LEN = 200_000  # plain-text; generous but bounded
 
 
 def is_configured() -> bool:
@@ -36,9 +45,21 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _from_address() -> str:
+    """Build a safe From header. Uses email.utils.formataddr so a display
+    name containing CR/LF/quotes can't inject extra SMTP headers."""
     addr = (os.environ.get("SMTP_FROM") or "no-reply@geoclaw.local").strip()
+    # Strip any control characters from the address itself.
+    addr = "".join(c for c in addr if c.isprintable() and c not in {"\r", "\n"})
     name = (os.environ.get("SMTP_FROM_NAME") or "").strip()
-    return f"{name} <{addr}>" if name else addr
+    name = "".join(c for c in name if c.isprintable() and c not in {"\r", "\n"})
+    if name:
+        return formataddr((name, addr))
+    return addr
+
+
+def _safe_subject(subject: str) -> str:
+    s = (subject or "").replace("\r", " ").replace("\n", " ").strip()
+    return s[:_MAX_SUBJECT_LEN]
 
 
 def send_email(to_address: str, subject: str, body_text: str, body_html: Optional[str] = None) -> bool:
@@ -46,25 +67,30 @@ def send_email(to_address: str, subject: str, body_text: str, body_html: Optiona
     Send a plaintext (optionally HTML) email.
 
     Returns True if delivery was attempted successfully. Returns False if SMTP
-    is not configured (message is logged to stdout instead) or delivery failed.
-    Never raises.
+    is not configured (message is logged to stdout instead), if inputs are
+    invalid, or if delivery failed. Never raises.
     """
     to_address = (to_address or "").strip()
-    if not to_address:
+    if not to_address or len(to_address) > MAX_EMAIL_LEN or not is_valid_email(to_address):
+        # Reject upfront — guards against header injection via newline-laden addresses.
+        sys.stderr.write(f"[email_service] refusing to send: invalid recipient address\n")
         return False
 
+    subject_safe = _safe_subject(subject)
+    body_text = (body_text or "")[:_MAX_BODY_LEN]
+
     msg = EmailMessage()
-    msg["Subject"] = subject
+    msg["Subject"] = subject_safe
     msg["From"] = _from_address()
     msg["To"] = to_address
-    msg.set_content(body_text or "")
+    msg.set_content(body_text)
     if body_html:
-        msg.add_alternative(body_html, subtype="html")
+        msg.add_alternative(body_html[:_MAX_BODY_LEN], subtype="html")
 
     if not is_configured():
         sys.stdout.write(
             f"[email_service] SMTP not configured — would have sent to {to_address}:\n"
-            f"  subject: {subject}\n  body: {body_text[:240]}\n"
+            f"  subject: {subject_safe}\n  body: {body_text[:240]}\n"
         )
         sys.stdout.flush()
         return False
@@ -76,6 +102,17 @@ def send_email(to_address: str, subject: str, body_text: str, body_html: Optiona
     timeout = float((os.environ.get("SMTP_TIMEOUT") or "15").strip() or 15)
     use_ssl = _bool_env("SMTP_USE_SSL", default=(port == 465))
     use_tls = _bool_env("SMTP_USE_TLS", default=(port == 587))
+    allow_plaintext = _bool_env("SMTP_ALLOW_PLAINTEXT", default=False)
+
+    # Refuse to send credentials (or any message) over an unencrypted socket
+    # unless the operator has explicitly opted in. Belt-and-braces guard
+    # against a misconfigured SMTP_PORT silently downgrading to plaintext.
+    if not (use_ssl or use_tls) and not allow_plaintext:
+        sys.stderr.write(
+            "[email_service] refusing to send: SMTP_USE_TLS/SMTP_USE_SSL not set and "
+            "SMTP_ALLOW_PLAINTEXT is off. Set SMTP_ALLOW_PLAINTEXT=1 for local dev.\n"
+        )
+        return False
 
     try:
         if use_ssl:
@@ -90,7 +127,7 @@ def send_email(to_address: str, subject: str, body_text: str, body_html: Optiona
                 if use_tls:
                     s.starttls(context=ssl.create_default_context())
                     s.ehlo()
-                if user:
+                if user and (use_tls or allow_plaintext):
                     s.login(user, password)
                 s.send_message(msg)
         return True
