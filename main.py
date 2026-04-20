@@ -22,6 +22,13 @@ from services.logging_service import get_logger
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 logger = get_logger("main")
+
+# Emit a single startup line so ops can confirm the deploy's security
+# posture from the logs without grepping env dumps.  Safe: no secret
+# values are logged, only SET / UNSET / ON / OFF plus non-secret
+# origin/host allow-lists.
+from services.security_posture import log_security_posture  # noqa: E402
+log_security_posture(logger)
 ROOT = Path(__file__).resolve().parent
 AGENT_BRAIN_STATUS_FILE = ROOT / "logs" / "agent_brain.status.json"
 
