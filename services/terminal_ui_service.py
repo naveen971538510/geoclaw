@@ -6,15 +6,31 @@ _AUTH_SHIM_HTML = """
 <script id="gc-auth-shim">
 (function(){
   var KEY='gc_access_token';
+  // Pages where a 401 should NOT bounce the user to /login — they are
+  // part of the unauthenticated auth flow itself. Bouncing mid-reset
+  // would destroy the token the user just clicked in their email.
+  var PUBLIC_PATHS={'/login':1,'/forgot-password':1,'/reset-password':1,'/verify-email':1};
+  // Public /api/* endpoints that should NOT get an Authorization header
+  // attached (and should not trigger logout-on-401).
+  var PUBLIC_API={'/api/auth/login':1,'/api/auth/signup':1,'/api/auth/verify-email':1,
+                  '/api/auth/request-password-reset':1,'/api/auth/reset-password':1};
+  // EventSource needs the token in the query string (browsers can't send
+  // custom headers on SSE). Scope this to SSE endpoints only — attaching
+  // tokens to every /api/* URL leaks JWTs into server / proxy access logs.
+  var SSE_PATHS=[/^\\/api\\/stream(\\/|$)/];
   function tok(){try{return localStorage.getItem(KEY)||'';}catch(_){return '';}}
   function isProtectedApi(urlStr){
     try{
       var u=new URL(urlStr,window.location.origin);
       if(u.origin!==window.location.origin) return false;
       if(!u.pathname.startsWith('/api/')) return false;
-      if(u.pathname==='/api/auth/login'||u.pathname==='/api/auth/signup') return false;
+      if(PUBLIC_API[u.pathname]) return false;
       return true;
     }catch(_){return false;}
+  }
+  function isSseUrl(u){
+    for(var i=0;i<SSE_PATHS.length;i++){ if(SSE_PATHS[i].test(u.pathname)) return true; }
+    return false;
   }
   var _fetch=window.fetch;
   window.fetch=function(input,init){
@@ -34,7 +50,7 @@ _AUTH_SHIM_HTML = """
       try{
         if(resp&&resp.status===401&&isProtectedApi(resp.url||urlStr)){
           try{localStorage.removeItem(KEY);localStorage.removeItem('gc_user');}catch(_){}
-          if(window.location.pathname!=='/login') window.location.href='/login';
+          if(!PUBLIC_PATHS[window.location.pathname]) window.location.href='/login';
         }
       }catch(_){}
       return resp;
@@ -45,7 +61,7 @@ _AUTH_SHIM_HTML = """
     function W(url,cfg){
       try{
         var u=new URL(url,window.location.origin);
-        if(u.origin===window.location.origin&&u.pathname.startsWith('/api/')){
+        if(u.origin===window.location.origin&&isSseUrl(u)){
           var t=tok();
           if(t&&!u.searchParams.has('token')){u.searchParams.set('token',t);url=u.toString();}
         }

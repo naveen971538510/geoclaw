@@ -234,9 +234,14 @@ def ensure_intelligence_schema() -> None:
             ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
             """
         )
+        # Case-insensitive uniqueness on email — the column-level UNIQUE
+        # constraint above is case-sensitive, which lets "Alice@x.com" and
+        # "alice@x.com" both register. normalize_email() lowercases client-side
+        # but belt-and-braces at the DB layer too.
         cur.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_users_email ON users (lower(email));
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower
+            ON users (lower(email));
             """
         )
         # Single-use email verification and password-reset tokens.
