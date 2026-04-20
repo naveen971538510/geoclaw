@@ -23,6 +23,9 @@ if str(ROOT) not in sys.path:
 # Tests must have a JWT secret set before importing auth_service functions
 # that touch JWT signing.
 os.environ.setdefault("GEOCLAW_JWT_SECRET", "test-" + "x" * 60)
+# Opt in to localhost-auth bypass for the unit tests that exercise the
+# dev-mode path — production defaults to deny. See middleware/auth.py.
+os.environ.setdefault("GEOCLAW_ALLOW_LOCALHOST_AUTH", "1")
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -224,6 +227,121 @@ def test_auth_public_paths_not_gated():
     c = TestClient(app)
     r = c.get("/public")
     assert r.status_code == 200
+
+
+# ---------- new: audit-fix coverage ---------------------------------------
+
+def test_password_length_cap_rejected():
+    """Long passwords must be rejected before PBKDF2 burns CPU."""
+    try:
+        hash_password("a" * 2000)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for oversized password")
+
+
+def test_verify_password_rejects_oversized_input():
+    h = hash_password("correct horse battery staple")
+    # Oversized input must short-circuit rather than feeding PBKDF2.
+    assert not verify_password("a" * 2000, h)
+
+
+def test_email_with_crlf_rejected():
+    assert not is_valid_email("a@b.co\r\nBcc: attacker@evil.com")
+
+
+def test_email_normalization_caps_length():
+    huge = ("x" * 500) + "@example.com"
+    n = normalize_email(huge)
+    assert len(n) <= 254
+
+
+def test_jwt_rejects_non_positive_sub():
+    # Manually craft a token with sub=0 to ensure the middleware rejects it.
+    import base64, hmac as _hmac, hashlib as _hashlib, json as _json, os as _os
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+    payload = {"sub": 0, "email": "x@y.com", "iat": int(time.time()), "exp": int(time.time()) + 60, "iss": "geoclaw"}
+    p = base64.urlsafe_b64encode(_json.dumps(payload, separators=(",", ":")).encode()).rstrip(b"=").decode()
+    sig = _hmac.new(_os.environ["GEOCLAW_JWT_SECRET"].encode(), f"{header}.{p}".encode(), _hashlib.sha256).digest()
+    s = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+    tok = f"{header}.{p}.{s}"
+    assert verify_access_token(tok) is None
+
+
+def test_is_protected_path_boundary():
+    """Ensure prefix match doesn't treat /api/auth/signup-admin as public."""
+    from middleware.auth import is_protected_path
+    assert is_protected_path("/api/auth/signup-admin")  # private
+    assert is_protected_path("/api/auth/loginX")        # private
+    assert not is_protected_path("/api/auth/signup")     # public
+    assert not is_protected_path("/api/auth/signup/")    # public (trailing slash)
+    assert not is_protected_path("/api/auth/login")      # public
+
+
+def test_auth_localhost_denied_when_opt_out():
+    """Without GEOCLAW_ALLOW_LOCALHOST_AUTH set, localhost must not bypass."""
+    saved = os.environ.pop("GEOCLAW_ALLOW_LOCALHOST_AUTH", None)
+    try:
+        app = _make_auth_app()
+        c = TestClient(app)
+        r = c.get("/api/ping")
+        assert r.status_code == 401
+    finally:
+        if saved is not None:
+            os.environ["GEOCLAW_ALLOW_LOCALHOST_AUTH"] = saved
+
+
+def test_auth_legacy_token_requires_match_even_on_localhost_when_locked_down():
+    """When localhost-auth is off, legacy token MUST match — no free pass."""
+    saved = os.environ.pop("GEOCLAW_ALLOW_LOCALHOST_AUTH", None)
+    try:
+        app = _make_auth_app(legacy_token="right-token")
+        c = TestClient(app)
+        # No token: denied.
+        r = c.get("/api/ping")
+        assert r.status_code == 401
+        # Wrong token: denied.
+        r = c.get("/api/ping", headers={"Authorization": "Bearer wrong"})
+        assert r.status_code == 401
+        # Right token: allowed.
+        r = c.get("/api/ping", headers={"Authorization": "Bearer right-token"})
+        assert r.status_code == 200
+    finally:
+        if saved is not None:
+            os.environ["GEOCLAW_ALLOW_LOCALHOST_AUTH"] = saved
+
+
+def test_query_token_only_accepted_on_public_reset_paths():
+    """?token= must not bootstrap auth on arbitrary /api/* endpoints."""
+    saved = os.environ.pop("GEOCLAW_ALLOW_LOCALHOST_AUTH", None)
+    try:
+        tok = create_access_token(123, "u@x.com")
+        app = _make_auth_app()
+        c = TestClient(app)
+        # /api/ping is not in QUERY_TOKEN_PATHS → query token ignored → 401.
+        r = c.get(f"/api/ping?token={tok}")
+        assert r.status_code == 401
+    finally:
+        if saved is not None:
+            os.environ["GEOCLAW_ALLOW_LOCALHOST_AUTH"] = saved
+
+
+def test_rate_limit_xff_ignored_without_trusted_proxy():
+    """Untrusted peers can't rotate X-Forwarded-For to get a fresh bucket."""
+    saved = os.environ.pop("GEOCLAW_TRUSTED_PROXIES", None)
+    try:
+        app = _make_rate_app()
+        c = TestClient(app)
+        # Burn the bucket with "rotating" XFF values — should all share the
+        # same peer-IP bucket and hit the limit.
+        expected_limit = EXPENSIVE_LIMIT[0]
+        codes = []
+        for i in range(expected_limit + 2):
+            codes.append(c.get("/api/news", headers={"X-Forwarded-For": f"9.9.9.{i}"}).status_code)
+        assert codes[expected_limit] == 429, "XFF rotation must not bypass rate limit"
+    finally:
+        if saved is not None:
+            os.environ["GEOCLAW_TRUSTED_PROXIES"] = saved
 
 
 if __name__ == "__main__":
