@@ -9,6 +9,7 @@
 set -euo pipefail
 
 BACKUP_DIR="$HOME/Documents/GeoClaw-Backups"
+ICLOUD_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/GeoClaw-Backups"
 KEEP_DAYS=14
 DB_NAME="geoclaw"
 PG_DUMP="/opt/homebrew/opt/postgresql@14/bin/pg_dump"
@@ -46,3 +47,17 @@ find "$BACKUP_DIR" -name "geoclaw-*.sql.gz" -type f -mtime +$KEEP_DAYS -delete 2
 
 KEPT=$(find "$BACKUP_DIR" -name "geoclaw-*.sql.gz" -type f | wc -l | tr -d ' ')
 echo "  Kept: $KEPT backup(s) in $BACKUP_DIR (retention: $KEEP_DAYS days)"
+
+# Offsite mirror: copy into iCloud Drive so Apple syncs it off this machine.
+# Silent no-op if iCloud Drive isn't set up on this Mac.
+ICLOUD_ROOT="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
+if [[ -d "$ICLOUD_ROOT" ]]; then
+  mkdir -p "$ICLOUD_DIR"
+  cp "$OUT" "$ICLOUD_DIR/"
+  # Same 14-day retention in the mirror
+  find "$ICLOUD_DIR" -name "geoclaw-*.sql.gz" -type f -mtime +$KEEP_DAYS -delete 2>/dev/null || true
+  MIRRORED=$(find "$ICLOUD_DIR" -name "geoclaw-*.sql.gz" -type f | wc -l | tr -d ' ')
+  echo "  ☁  Mirrored to iCloud: $ICLOUD_DIR ($MIRRORED file(s))"
+else
+  echo "  ⚠  iCloud Drive not detected — skipping offsite mirror."
+fi
