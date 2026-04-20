@@ -113,6 +113,22 @@ async def _auth_middleware(request: Request, call_next):
             return _unauth_response(request)
     return await call_next(request)
 
+
+# ---------------------------------------------------------------------------
+# Baseline security response headers (see services/security_headers.py).
+# Mirrors the middleware in main.py so every public response — SPA HTML,
+# JSON, static assets — lands with the same hardening.
+# ---------------------------------------------------------------------------
+from services.security_headers import apply_security_headers  # noqa: E402
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for key, value in apply_security_headers(response.raw_headers).items():
+        response.headers[key] = value
+    return response
+
 # Multi-asset panel table — every instrument the dashboard knows about.
 # The 10 assets below are the canonical GeoClaw Trader watchlist; the SPA's
 # asset switcher reads from /api/instruments to stay in sync with this table.
