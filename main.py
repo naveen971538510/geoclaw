@@ -80,6 +80,23 @@ def _stream_cors_headers(request: Request) -> dict:
     return {}
 
 
+# ---------------------------------------------------------------------------
+# Baseline security response headers.  See services/security_headers.py for
+# the rationale behind each header.  This middleware only *adds* missing
+# headers, so a route that intentionally overrides (e.g. a legitimate same-
+# origin iframe embed) still wins.
+# ---------------------------------------------------------------------------
+from services.security_headers import apply_security_headers  # noqa: E402
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for key, value in apply_security_headers(response.raw_headers).items():
+        response.headers[key] = value
+    return response
+
+
 def _get_query_engine():
     from services.query_engine import QueryEngine
 
