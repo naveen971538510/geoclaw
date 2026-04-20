@@ -4,6 +4,7 @@ import sqlite3
 from typing import Callable, Dict, List
 
 from services.ai_contracts import default_query_answer_bundle, format_query_answer_text
+from services.db_helpers import safe_identifier
 
 
 QUERY_PATTERNS = [
@@ -104,19 +105,36 @@ class QueryEngine:
         return bool(row)
 
     def _columns(self, conn, table_name: str) -> List[str]:
+        # ``PRAGMA table_info(...)`` cannot take a ``?`` placeholder, so
+        # the table name is inlined via f-string.  Validate it against
+        # the SQL-identifier grammar first so a caller that ever threads
+        # user or config input through here can't escape into arbitrary
+        # SQL.
         try:
-            rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+            table = safe_identifier(table_name, "table")
+        except ValueError:
+            return []
+        try:
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
             return [str(row[1]) for row in rows]
         except Exception:
             return []
 
     def _like_term(self, table: str, column: str, term: str, limit: int = 5) -> List[Dict]:
+        # Both identifiers are inlined into the SQL below; validate them
+        # against the SQL-identifier grammar so they can't carry
+        # arbitrary SQL even if a future caller forwards user input.
+        try:
+            safe_table = safe_identifier(table, "table")
+            safe_column = safe_identifier(column, "column")
+        except ValueError:
+            return []
         conn = self._db()
         try:
-            if not self._table_exists(conn, table) or column not in self._columns(conn, table):
+            if not self._table_exists(conn, safe_table) or safe_column not in self._columns(conn, safe_table):
                 return []
             rows = conn.execute(
-                f"SELECT * FROM {table} WHERE {column} LIKE ? ORDER BY ROWID DESC LIMIT ?",
+                f"SELECT * FROM {safe_table} WHERE {safe_column} LIKE ? ORDER BY ROWID DESC LIMIT ?",
                 (f"%{term}%", int(limit)),
             ).fetchall()
             return [dict(row) for row in rows]
@@ -624,9 +642,14 @@ class QueryEngine:
                 selected_columns.append("sentiment_label")
             if "relevance_score" in article_columns:
                 selected_columns.append("relevance_score")
+            # Every entry in ``selected_columns`` is a hardcoded literal,
+            # but this SELECT inlines them via f-string so we still
+            # validate each one against the identifier grammar — cheap
+            # belt-and-suspenders that also documents the invariant.
+            safe_columns = [safe_identifier(col, "column") for col in selected_columns]
             rows = conn.execute(
                 f"""
-                SELECT {", ".join(selected_columns)}
+                SELECT {", ".join(safe_columns)}
                 FROM ingested_articles
                 ORDER BY COALESCE(fetched_at, published_at, '') DESC, id DESC
                 LIMIT 10

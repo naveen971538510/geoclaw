@@ -1,19 +1,9 @@
-import re
+from services.db_helpers import get_conn, safe_identifier as _safe_identifier  # noqa: F401
 
-from services.db_helpers import get_conn
-
-# SQLite/Postgres identifier rule: ASCII letter/underscore, then letters,
-# digits, or underscores.  Identifiers have to be inlined into DDL (they
-# cannot be parametrised like values), so we validate them instead of
-# passing unvalidated strings into an f-string — that's a SQL-injection
-# footgun if any caller ever wires user/config input into these helpers.
-_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _safe_identifier(value: str, kind: str) -> str:
-    if not isinstance(value, str) or not _IDENTIFIER_RE.match(value):
-        raise ValueError(f"Unsafe {kind} identifier: {value!r}")
-    return value
+# ``_safe_identifier`` is a re-export of ``services.db_helpers.safe_identifier``
+# kept under the old private name so pre-existing call sites (``_table_columns``,
+# ``_ensure_column``, ``run_migration``) keep working without a churn patch.
+# New code should import ``safe_identifier`` directly from ``services.db_helpers``.
 
 
 def _table_columns(cur, table_name: str):

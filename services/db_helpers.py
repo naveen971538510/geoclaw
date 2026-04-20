@@ -8,11 +8,40 @@ Routing:
 All callers use `?` placeholders; Postgres path transparently converts them to `%s`.
 """
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Sequence
 
 from config import DB_PATH
+
+# SQLite/Postgres identifier grammar: ASCII letter or underscore, then
+# letters, digits, or underscores.  Identifiers can't be parametrised
+# with ``?`` placeholders, so any code path that inlines a table or
+# column name into an f-string MUST validate the name first — otherwise
+# it's a latent SQL-injection footgun the moment a caller starts
+# threading user or config input through.
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def safe_identifier(value: str, kind: str = "identifier") -> str:
+    """Validate ``value`` as a bare SQL identifier.
+
+    Returns the identifier unchanged on success; raises ``ValueError``
+    on anything that doesn't match the ``[A-Za-z_][A-Za-z0-9_]*`` grammar
+    (so whitespace, quotes, statement terminators, dots, backticks, and
+    every other non-ASCII character are rejected).
+
+    ``kind`` is the noun printed in the error message (``"table"``,
+    ``"column"``, etc.) so a caller can tell which argument was bad.
+    """
+    # ``fullmatch`` rather than ``match`` — ``$`` in Python's default
+    # (non-MULTILINE) mode still accepts a trailing ``\n``, which would
+    # let ``"foo\n; DROP TABLE x"`` slip through if the attacker could
+    # also sneak the rest of the payload onto the same parameter.
+    if not isinstance(value, str) or not IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"Unsafe {kind} identifier: {value!r}")
+    return value
 
 PRAGMAS = (
     "PRAGMA journal_mode=WAL;",
