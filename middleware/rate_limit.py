@@ -3,13 +3,21 @@ Per-IP sliding-window rate limiting middleware.
 
 In-memory only — scaling to multiple workers/machines needs Redis.
 Default: 60 req/min for /api/*. Expensive LLM endpoints: 10 req/min.
+
+Proxy trust: by default we ignore X-Forwarded-For / X-Real-IP because any
+client can set them (trivial rate-limit bypass by rotating the header value).
+Set `GEOCLAW_TRUSTED_PROXIES` to a comma-separated list of hosts you trust
+(e.g. `127.0.0.1,10.0.0.0/8` — exact-match only here, no CIDR parsing) to
+opt in. Typical prod deployments set this to the loopback address of your
+fronting reverse proxy (Fly, Railway, nginx, etc.).
 """
 from __future__ import annotations
 
+import os
 import time
 from collections import deque
 from threading import Lock
-from typing import Deque, Dict, Iterable, Tuple
+from typing import Deque, Dict, FrozenSet, Iterable, Tuple
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -30,14 +38,27 @@ _buckets: Dict[str, Deque[float]] = {}
 _lock = Lock()
 
 
+def _trusted_proxies() -> FrozenSet[str]:
+    raw = (os.environ.get("GEOCLAW_TRUSTED_PROXIES") or "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
 def client_ip(request: Request) -> str:
-    forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real = str(request.headers.get("x-real-ip") or "").strip()
-    if real:
-        return real
-    return str((request.client.host if request.client else "") or "unknown")
+    """Return the client IP. Only honour X-Forwarded-For / X-Real-IP when the
+    direct peer is in GEOCLAW_TRUSTED_PROXIES — otherwise clients can spoof
+    the header and bypass rate limits by rotating values."""
+    peer = str((request.client.host if request.client else "") or "unknown")
+    trusted = _trusted_proxies()
+    if peer in trusted:
+        forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        real = str(request.headers.get("x-real-ip") or "").strip()
+        if real:
+            return real
+    return peer
 
 
 def _limit_for(path: str) -> Tuple[int, int]:
