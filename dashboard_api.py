@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 try:
     import config  # noqa: F401
 except Exception:
@@ -52,6 +53,18 @@ _origins = [
 _prod = (os.environ.get("GEOCLAW_PRODUCTION_ORIGIN") or "").strip()
 if _prod:
     _origins.append(_prod)
+
+# Opt-in Host header allow-list.  Mirrors the middleware in main.py so
+# the dashboard gets the same protection.  See GEOCLAW_TRUSTED_HOSTS in
+# ENV_VARS.md for details.  Off by default; when set we always add the
+# localhost identities so healthchecks and unit tests keep working.
+_trusted_hosts_env = (os.environ.get("GEOCLAW_TRUSTED_HOSTS") or "").strip()
+if _trusted_hosts_env:
+    _trusted_hosts = [h.strip() for h in _trusted_hosts_env.split(",") if h.strip()]
+    for _always in ("localhost", "127.0.0.1", "testserver"):
+        if _always not in _trusted_hosts:
+            _trusted_hosts.append(_always)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted_hosts)
 
 app.add_middleware(
     CORSMiddleware,
