@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from data import demo_articles
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,32 @@ from config import DB_PATH, GEOCLAW_LOCAL_TOKEN, OPENAI_API_KEY
 from services.logging_service import get_logger
 
 app = FastAPI()
+
+# ---------------------------------------------------------------------------
+# Opt-in Host header allow-list.  Set GEOCLAW_TRUSTED_HOSTS to a
+# comma-separated list (e.g. ``app.example.com,www.example.com``) and
+# starlette will 400 any request whose ``Host:`` header is outside the
+# list.  Defense against HTTP Host header injection (attacker forging
+# ``Host: evil.com`` to poison cached absolute URLs, password-reset
+# links, webhook-reply targets, etc.).
+#
+# Off by default so existing deploys behind reverse proxies that strip
+# or rewrite the Host header don't break.  ``*`` wildcards are accepted
+# the same way Starlette accepts them — ``*.example.com`` matches
+# subdomains but not ``example.com`` itself; include both if you need
+# both.  ``localhost``, ``127.0.0.1``, ``testserver`` are always added
+# so healthchecks and the unit tests keep working regardless of env.
+# ---------------------------------------------------------------------------
+_trusted_hosts_env = (os.environ.get("GEOCLAW_TRUSTED_HOSTS") or "").strip()
+if _trusted_hosts_env:
+    _trusted_hosts = [h.strip() for h in _trusted_hosts_env.split(",") if h.strip()]
+    # Always include the local identities so unit tests and loopback
+    # healthchecks keep working when the feature is turned on.
+    for _always in ("localhost", "127.0.0.1", "testserver"):
+        if _always not in _trusted_hosts:
+            _trusted_hosts.append(_always)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted_hosts)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 logger = get_logger("main")
 ROOT = Path(__file__).resolve().parent
