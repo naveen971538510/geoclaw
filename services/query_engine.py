@@ -4,6 +4,7 @@ import sqlite3
 from typing import Callable, Dict, List
 
 from services.ai_contracts import default_query_answer_bundle, format_query_answer_text
+from services.db_helpers import escape_like
 
 
 QUERY_PATTERNS = [
@@ -115,9 +116,11 @@ class QueryEngine:
         try:
             if not self._table_exists(conn, table) or column not in self._columns(conn, table):
                 return []
+            # Escape LIKE wildcards on the untrusted side so callers can't
+            # pin a worker with ``%%%%`` (see services/db_helpers.escape_like).
             rows = conn.execute(
-                f"SELECT * FROM {table} WHERE {column} LIKE ? ORDER BY ROWID DESC LIMIT ?",
-                (f"%{term}%", int(limit)),
+                f"SELECT * FROM {table} WHERE {column} LIKE ? ESCAPE '\\' ORDER BY ROWID DESC LIMIT ?",
+                (f"%{escape_like(term)}%", int(limit)),
             ).fetchall()
             return [dict(row) for row in rows]
         finally:
@@ -341,16 +344,19 @@ class QueryEngine:
         try:
             results = []
             for word in words[:4]:
+                # ``word`` comes from a user-supplied question; escape LIKE
+                # wildcards on the untrusted side.
+                like = f"%{escape_like(word)}%"
                 rows = conn.execute(
-                    """
+                    r"""
                     SELECT thesis_key, current_claim, confidence, status, terminal_risk
                     FROM agent_theses
                     WHERE status != 'superseded'
-                      AND (thesis_key LIKE ? OR current_claim LIKE ? OR title LIKE ?)
+                      AND (thesis_key LIKE ? ESCAPE '\' OR current_claim LIKE ? ESCAPE '\' OR title LIKE ? ESCAPE '\')
                     ORDER BY confidence DESC, evidence_count DESC
                     LIMIT 3
                     """,
-                    (f"%{word}%", f"%{word}%", f"%{word}%"),
+                    (like, like, like),
                 ).fetchall()
                 results.extend(dict(row) for row in rows)
         finally:

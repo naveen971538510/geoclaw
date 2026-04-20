@@ -144,6 +144,32 @@ class _PgCursor:
         self._cur.close()
 
 
+def escape_like(term: str) -> str:
+    """Escape SQL LIKE wildcards in an untrusted search fragment.
+
+    The wrapped pattern must be executed with ``ESCAPE '\\'`` so that ``\\%``
+    and ``\\_`` are treated as literals rather than wildcards. Escaping the
+    backslash itself first is critical — otherwise ``\\`` in the input would
+    collide with the escape character we just introduced.
+
+    Returns the escaped *fragment* (without the surrounding ``%`` anchors) so
+    callers stay in control of exact/prefix/substring semantics.
+
+    >>> escape_like("100% win")
+    '100\\\\% win'
+    >>> escape_like("a_b")
+    'a\\\\_b'
+    >>> escape_like(r"c:\\path")
+    'c:\\\\\\\\path'
+    """
+    return (
+        str(term or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
 def get_conn(db_path=None):
     if _USE_POSTGRES:
         return _PgConn()
