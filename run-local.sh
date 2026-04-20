@@ -74,8 +74,10 @@ echo "  Press Ctrl-C to stop."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Open browser after 3s (in background so it doesn't block the server)
-( sleep 3 && open "http://localhost:$PORT/login" ) &
+# Open browser after 3s unless explicitly suppressed (e.g. LaunchAgent)
+if [[ -z "${GEOCLAW_NO_BROWSER:-}" ]]; then
+  ( sleep 3 && open "http://localhost:$PORT/login" ) &
+fi
 
 export PORT
 exec "$PY" dashboard_api.py

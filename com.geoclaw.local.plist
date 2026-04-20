@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  GeoClaw LaunchAgent — auto-starts on login.
+  Install:   ./install-autostart.sh
+  Uninstall: ./install-autostart.sh --uninstall
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.geoclaw.local</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__WORKDIR__/run-local.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__WORKDIR__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__WORKDIR__/.geoclaw.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__WORKDIR__/.geoclaw.log</string>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>GEOCLAW_NO_BROWSER</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>

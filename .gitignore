@@ -38,3 +38,4 @@ main.py.backup
 *_working.py
 *_working_*.py
 .env.local
+.geoclaw.log
