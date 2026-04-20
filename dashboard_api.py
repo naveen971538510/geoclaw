@@ -53,12 +53,31 @@ _prod = (os.environ.get("GEOCLAW_PRODUCTION_ORIGIN") or "").strip()
 if _prod:
     _origins.append(_prod)
 
+# Defense-in-depth: pin the CORS allow-lists to exactly the methods and
+# headers the dashboard uses.  The allow_origins list is already explicit,
+# so a ``*`` here would only matter if the origin allow-list were ever
+# weakened — but it's cheap insurance.  Every route is GET or POST (see the
+# @app.get / @app.post decorators throughout this module); the only
+# request headers this module reads are Authorization (bearer token),
+# Origin (for the CORS preflight echo) and Content-Type (for JSON POSTs).
+# X-Geoclaw-Token is mirrored from the sibling ``_mutation_guard`` in
+# main.py so callers can present the token the same way to either app.
+_ALLOWED_METHODS = ["GET", "POST", "OPTIONS"]
+_ALLOWED_HEADERS = [
+    "Accept",
+    "Authorization",
+    "Content-Type",
+    "Origin",
+    "X-Geoclaw-Token",
+    "X-Requested-With",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=_ALLOWED_METHODS,
+    allow_headers=_ALLOWED_HEADERS,
 )
 app.mount("/dashboard-app", StaticFiles(directory=str(SPA_DIST_DIR), check_dir=False), name="dashboard_app")
 
