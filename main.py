@@ -80,6 +80,89 @@ def _stream_cors_headers(request: Request) -> dict:
     return {}
 
 
+# ---------------------------------------------------------------------------
+# Opt-in read-only /api/* guard (closes M4 from the security scan).
+#
+# ``_mutation_guard`` already gates every POST /api route that writes state,
+# but historic read-only GETs (``/api/predictions``, ``/api/research/log``,
+# ``/api/intelligence/regime``, …) open raw sqlite connections and return the
+# data directly.  On a pure-localhost bind that's fine; behind any
+# reverse-proxy or LAN-bound deployment it leaks the agent's DB to anyone
+# who finds the URL.
+#
+# This middleware is OFF by default so existing LAN setups don't break.
+# Set ``GEOCLAW_GUARD_READ_API=1`` to require localhost-or-token for every
+# ``/api/*`` request, except the two endpoints that MUST stay reachable by
+# non-local callers:
+#   * ``/api/events/stream`` — SSE; has its own Origin allow-list above.
+#   * ``/api/telegram/webhook`` — Telegram posts from the public internet;
+#     has its own ``TELEGRAM_WEBHOOK_SECRET`` guard.
+# ---------------------------------------------------------------------------
+
+_READ_API_GUARD_ENABLED = str(os.environ.get("GEOCLAW_GUARD_READ_API") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+_READ_API_GUARD_EXEMPT = {
+    "/api/events/stream",
+    "/api/telegram/webhook",
+}
+
+
+def _read_api_guard_applies(path: str) -> bool:
+    """True when this path should be gated by the opt-in read guard."""
+    if not _READ_API_GUARD_ENABLED:
+        return False
+    if not path.startswith("/api/"):
+        return False
+    if path in _READ_API_GUARD_EXEMPT:
+        return False
+    return True
+
+
+def _extract_provided_token(request: Request) -> str:
+    """Accept the token via any of: ``x-geoclaw-token`` header,
+    ``Authorization: Bearer <token>``, or ``?token=`` query param.  Mirrors
+    the presentation channels accepted by ``_mutation_guard`` and by the
+    sibling middleware in ``dashboard_api.py`` so callers never have to
+    guess which header a given app wants."""
+    header = str(request.headers.get("x-geoclaw-token") or "").strip()
+    if header:
+        return header
+    auth = str(request.headers.get("authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return str(request.query_params.get("token") or "").strip()
+
+
+@app.middleware("http")
+async def _read_api_guard_middleware(request: Request, call_next):
+    if request.method != "OPTIONS" and _read_api_guard_applies(request.url.path):
+        token = str(GEOCLAW_LOCAL_TOKEN or "").strip()
+        if _local_client(request):
+            return await call_next(request)
+        if token:
+            provided = _extract_provided_token(request)
+            if provided and hmac.compare_digest(provided, token):
+                return await call_next(request)
+        return JSONResponse(
+            {
+                "status": "error",
+                "route": request.url.path,
+                "error": (
+                    "Unauthorized — GEOCLAW_GUARD_READ_API is on; present the "
+                    "GEOCLAW_LOCAL_TOKEN via the x-geoclaw-token header, "
+                    "Authorization: Bearer, or ?token=."
+                ),
+            },
+            status_code=401,
+        )
+    return await call_next(request)
+
+
 def _get_query_engine():
     from services.query_engine import QueryEngine
 
