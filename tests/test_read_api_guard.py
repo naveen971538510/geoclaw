@@ -23,7 +23,6 @@ import unittest
 from unittest import mock
 
 from starlette.requests import Request
-from starlette.responses import Response
 
 os.environ.setdefault("GEOCLAW_DB_BACKEND", "sqlite")
 
