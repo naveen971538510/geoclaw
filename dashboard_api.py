@@ -113,6 +113,14 @@ async def _auth_middleware(request: Request, call_next):
             return _unauth_response(request)
     return await call_next(request)
 
+
+# Startup security-posture line.  See services/security_posture.py for
+# the rationale — one grep and ops know whether the deploy is hardened.
+from services.logging_service import get_logger as _get_logger  # noqa: E402
+from services.security_posture import log_security_posture as _log_security_posture  # noqa: E402
+
+_log_security_posture(_get_logger("dashboard_api"))
+
 # Multi-asset panel table — every instrument the dashboard knows about.
 # The 10 assets below are the canonical GeoClaw Trader watchlist; the SPA's
 # asset switcher reads from /api/instruments to stay in sync with this table.
